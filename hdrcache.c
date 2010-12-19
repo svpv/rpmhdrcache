@@ -4,10 +4,9 @@
 #include <unistd.h>
 #include <time.h>
 #include <rpm/rpmlib.h>
+#include <lzo/lzo1x.h>
 #include "hdrcache.h"
 #include "db4.h"
-
-#include <stdio.h>
 
 static __thread
 struct db4env *env4;
@@ -36,6 +35,7 @@ int initialize()
     initialized = 1;
     atexit(finalize);
     now = (time(NULL) >> 16);
+    lzo_init();
     return initialized;
 }
 
@@ -70,6 +70,11 @@ int make_key(const char *path, struct stat st, char *key)
     return len + 1 + sizeof sm;
 }
 
+#include <stdio.h>
+
+static
+const int hdrsize_max = (256 << 10);
+
 Header hdrcache_get(const char *path, struct stat st, unsigned *off)
 {
     if (initialize() < 0)
@@ -94,14 +99,25 @@ Header hdrcache_get(const char *path, struct stat st, unsigned *off)
 	data->atime = now;
 	db4db_put(db4, key, keysize, data, datasize);
     }
-    Header h = headerLoad(data->blob);
+    void *blob = data->blob;
+    char ublob[hdrsize_max];
+    if (data->vflags & V_LZO) {
+	int blobsize = datasize - sizeof(struct cache_ent) + 1;
+	lzo_uint ublobsize = 0;
+	int rc = lzo1x_decompress(blob, blobsize, ublob, &ublobsize, NULL);
+	if (rc != LZO_E_OK || ublobsize < 1 || ublobsize > hdrsize_max) {
+	    fprintf(stderr, "%s %s: lzo1x_decompress failed\n", __func__, key);
+	    return NULL;
+	}
+	blob = ublob;
+    }
+    Header h = headerLoad(blob);
     if (h == NULL) {
 	fprintf(stderr, "%s %s: headerLoad failed\n", __func__, key);
 	return NULL;
     }
     if (off)
 	*off = data->off;
-    fprintf(stderr, "%s %s: OK\n", __func__, key);
     return h;
 }
 
@@ -112,11 +128,15 @@ void hdrcache_put(const char *path, struct stat st, Header h, unsigned off)
     struct db4db *db4 = db4env_db(env4, "cache", DB4_BTREE);
     if (db4 == NULL)
 	return;
+    int hdrsize = headerSizeof(h, HEADER_MAGIC_NO);
+    if (hdrsize < 1 || hdrsize > hdrsize_max)
+	return;
     char key[4096];
     int keysize = make_key(path, st, key);
-    int hdrsize = headerSizeof(h, HEADER_MAGIC_NO);
-    int datasize = sizeof(struct cache_ent) + hdrsize - 1;
-    char databuf[datasize];
+    int databufsize = sizeof(struct cache_ent) - 1 +
+	    hdrsize + hdrsize / 16 + 64 + 3;
+    char databuf[databufsize];
+    int datasize;
     struct cache_ent *data = (void *) databuf;
     data->vflags = V_RSV;
     data->mtime = now;
@@ -128,7 +148,18 @@ void hdrcache_put(const char *path, struct stat st, Header h, unsigned off)
 	fprintf(stderr, "%s %s: headerLoad failed\n", __func__, key);
 	return;
     }
-    memcpy(data->blob, blob, hdrsize);
+    char lzobuf[LZO1X_1_MEM_COMPRESS];
+    lzo_uint lzosize = 0;
+    lzo1x_1_compress(blob, hdrsize, data->blob, &lzosize, lzobuf);
+    if (lzosize > 0 && lzosize < hdrsize) {
+	data->vflags |= V_LZO;
+	datasize = sizeof(struct cache_ent) - 1 + lzosize;
+    }
+    else {
+	memcpy(data->blob, blob, hdrsize);
+	datasize = sizeof(struct cache_ent) - 1 + hdrsize;
+    }
+    free(blob);
     db4db_put(db4, key, keysize, data, datasize);
 }
 
