@@ -55,11 +55,21 @@ FD_t Fopen(const char *path, const char *fmode)
     return fd;
 }
 
-#include <stdio.h>
+#include "hdrcache.h"
 
 rpmRC rpmReadPackageHeader(FD_t fd, Header *hdrp,
 	int *isSource, int *major, int *minor)
 {
+    Header hdr_;
+    int isSource_, major_, minor_;
+    if (hdrp == NULL)
+	hdrp = &hdr_;
+    if (isSource == NULL)
+	isSource = &isSource_;
+    if (major == NULL)
+	major = &major_;
+    if (minor == NULL)
+	minor = &minor_;
     static __thread
     rpmRC (*rpmReadPackageHeader_next)(FD_t fd, Header *hdrp,
 	    int *isSource, int *major, int *minor);
@@ -68,17 +78,38 @@ rpmRC rpmReadPackageHeader(FD_t fd, Header *hdrp,
 	assert(rpmReadPackageHeader_next);
     }
     struct stat st;
-    if (fd && fd == last_fd &&
+    bool match =
+	fd && fd == last_fd &&
 	stat(last_path, &st) == 0 && S_ISREG(st.st_mode) &&
 	st.st_dev == last_st.st_dev && st.st_ino == last_st.st_ino &&
-	st.st_size == last_st.st_size && st.st_mtime == last_st.st_mtime)
-    {
-	fprintf(stderr, "cached rpmReadPackageHeader for %s\n", last_path);
+	st.st_size == last_st.st_size && st.st_mtime == last_st.st_mtime;
+    if (match) {
+	unsigned off;
+	*hdrp = hdrcache_get(last_path, st, &off);
+	if (*hdrp) {
+	    int pos = lseek(Fileno(fd), off, SEEK_SET);
+	    if (pos != off)
+		*hdrp = headerFree(*hdrp);
+	    else {
+		*isSource = !headerIsEntry(*hdrp, RPMTAG_SOURCERPM);
+		*major = 3;
+		*minor = 0;
+		return RPMRC_OK;
+	    }
+	}
     }
-    else {
-	fprintf(stderr, "no cached rpmReadPackageHeader\n");
+    rpmRC rc = rpmReadPackageHeader_next(fd, hdrp, isSource, major, minor);
+    if (match) {
+	if (rc == RPMRC_OK && *major == 3 && *minor == 0) {
+	    int realSource = !headerIsEntry(*hdrp, RPMTAG_SOURCERPM);
+	    if (realSource == *isSource) {
+		int pos = lseek(Fileno(fd), 0, SEEK_CUR);
+		if (pos > 0)
+		    hdrcache_put(last_path, st, *hdrp, pos);
+	    }
+	}
     }
-    return rpmReadPackageHeader_next(fd, hdrp, isSource, major, minor);
+    return rc;
 }
 
 // ex: set ts=8 sts=4 sw=4 noet:
