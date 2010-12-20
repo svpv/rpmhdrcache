@@ -23,6 +23,7 @@
 struct db4env {
     DB_ENV *env;
     int dirfd;
+    unsigned umask;
     struct db4db *db4list;
     char dirname[1];
 };
@@ -112,6 +113,21 @@ struct db4env *db4env_open(const char *dirname)
 	return NULL;
     }
 
+    // initialize umask
+    struct stat st;
+    rc = fstat(env4->dirfd, &st);
+    if (rc < 0) {
+	ERROR("fstat %s: %m", env4->dirname);
+	// 3
+	close(env4->dirfd);
+	// 2
+	env4->env->close(env4->env, 0);
+	// 1
+	free(env4);
+	return NULL;
+    }
+    env4->umask = (~st.st_mode & 022);
+
     // 4: lock dir
     do
 	rc = flock(env4->dirfd, LOCK_EX);
@@ -132,11 +148,17 @@ struct db4env *db4env_open(const char *dirname)
     sigfillset(&set);
     sigprocmask(SIG_BLOCK, &set, &oldset);
 
+    // 6: adjust umask
+    unsigned omask = umask(env4->umask);
+
     // open env
     rc = (env4->env->open)(env4->env, env4->dirname,
-	    DB_CREATE | DB_INIT_CDB | DB_INIT_MPOOL, 0);
+	    DB_CREATE | DB_INIT_CDB | DB_INIT_MPOOL, 0666);
     if (rc) {
 	ERROR("env_open %s: %s", env4->dirname, db_strerror(rc));
+	// 6
+	if (omask != env4->umask)
+	    umask(omask);
 	// 5
 	sigprocmask(SIG_SETMASK, &oldset, NULL);
 	// 4
@@ -152,12 +174,15 @@ struct db4env *db4env_open(const char *dirname)
 
     // run recovery
     rc = env4->env->failchk(env4->env, 0);
+
+    // 6, 5, 4
+    if (omask != env4->umask)
+	umask(omask);
+    sigprocmask(SIG_SETMASK, &oldset, NULL);
+    flock(env4->dirfd, LOCK_UN);
+
     if (rc) {
 	ERROR("env_failchk %s: %s", env4->dirname, db_strerror(rc));
-	// 5
-	sigprocmask(SIG_SETMASK, &oldset, NULL);
-	// 4
-	flock(env4->dirfd, LOCK_UN);
 	// 3
 	close(env4->dirfd);
 	// 2
@@ -166,9 +191,6 @@ struct db4env *db4env_open(const char *dirname)
 	free(env4);
 	return NULL;
     }
-
-    sigprocmask(SIG_SETMASK, &oldset, NULL);
-    flock(env4->dirfd, LOCK_UN);
 
     return env4;
 }
@@ -284,10 +306,15 @@ struct db4db *db4env_db(struct db4env *env4,
     sigfillset(&set);
     sigprocmask(SIG_BLOCK, &set, &oldset);
 
+    // adjust umask
+    unsigned omask = umask(env4->umask);
+
     // open db
     rc = db4->db->open(db4->db, NULL, db4->dbname, NULL,
 	    /*DB_BTREE*/ flags, DB_CREATE, 0666);
 
+    if (omask != env4->umask)
+	umask(omask);
     sigprocmask(SIG_SETMASK, &oldset, NULL);
     flock(env4->dirfd, LOCK_UN);
 
