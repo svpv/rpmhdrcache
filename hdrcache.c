@@ -1,4 +1,6 @@
+#include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -17,8 +19,20 @@ void finalize()
     db4env_close(env4);
 }
 
+static inline
+const char *opt_(const char *name)
+{
+    const char *str = getenv(name);
+    return (str && *str) ? str : NULL;
+}
+
+#define opt(name) opt_("RPMHDRCACHE_" name)
+
 static __thread
 unsigned short now; // binary days since the epoch
+
+static __thread
+bool noatime;
 
 static
 int initialize()
@@ -27,7 +41,16 @@ int initialize()
     int initialized;
     if (initialized)
 	return initialized;
-    env4 = db4env_open("/tmp/.rpmhdrcache");
+    if (opt("DISABLE")) {
+	initialized = -1;
+	return initialized;
+    }
+    if (opt("NOATIME"))
+	noatime = true;
+    const char *dir = opt("DIR");
+    if (dir == NULL)
+	dir = "/tmp/.rpmhdrcache";
+    env4 = db4env_open(dir);
     if (env4 == NULL) {
 	initialized = -1;
 	return initialized;
@@ -167,7 +190,7 @@ void hdrcache_put(const char *path, struct stat st, Header h, unsigned off)
     struct cache_ent *data = (void *) databuf;
     data->vflags = V_RSV;
     data->mtime = now;
-    data->atime = 1;
+    data->atime = noatime ? 0 : 1;
     data->reserved = 0;
     data->off = off;
     void *blob = headerUnload(h);
