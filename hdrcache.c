@@ -79,11 +79,25 @@ Header hdrcache_get(const char *path, struct stat st, unsigned *off)
 {
     if (initialize() < 0)
 	return NULL;
-    struct db4db *db4 = db4env_db(env4, "cache", DB4_BTREE);
-    if (db4 == NULL)
-	return NULL;
     char key[4096];
     int keysize = make_key(path, st, key);
+    // for n-v-r.arch.rpm, dbname will be arch
+    const char *arch = NULL;
+    char *dot = strrchr(key, '.');
+    if (dot) {
+	*dot = '\0';
+	arch = strrchr(key, '.');
+	if (arch)
+	    if (++arch == dot)
+		arch = NULL;
+    }
+    if (arch == NULL)
+	arch = "rpm";
+    struct db4db *db4 = db4env_db(env4, arch, DB4_BTREE);
+    if (db4 == NULL)
+	return NULL;
+    if (dot)
+	*dot = '.';
     struct cache_ent *data;
     int datasize;
     bool got = db4db_get(db4, key, keysize, &data, &datasize);
@@ -125,14 +139,27 @@ void hdrcache_put(const char *path, struct stat st, Header h, unsigned off)
 {
     if (initialize() < 0)
 	return;
-    struct db4db *db4 = db4env_db(env4, "cache", DB4_BTREE);
+    char key[4096];
+    int keysize = make_key(path, st, key);
+    const char *arch = NULL;
+    char *dot = strrchr(key, '.');
+    if (dot) {
+	*dot = '\0';
+	arch = strrchr(key, '.');
+	if (arch)
+	    if (++arch == dot)
+		arch = NULL;
+    }
+    if (arch == NULL)
+	arch = "rpm";
+    struct db4db *db4 = db4env_db(env4, arch, DB4_BTREE);
     if (db4 == NULL)
 	return;
+    if (dot)
+	*dot = '.';
     int hdrsize = headerSizeof(h, HEADER_MAGIC_NO);
     if (hdrsize < 1 || hdrsize > hdrsize_max)
 	return;
-    char key[4096];
-    int keysize = make_key(path, st, key);
     int databufsize = sizeof(struct cache_ent) - 1 +
 	    hdrsize + hdrsize / 16 + 64 + 3;
     char databuf[databufsize];
