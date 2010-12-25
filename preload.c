@@ -87,7 +87,7 @@ rpmRC rpmReadPackageHeader(FD_t fd, Header *hdrp,
 	st.st_size == last_st.st_size && st.st_mtime == last_st.st_mtime;
     if (match) {
 	unsigned off;
-	*hdrp = hdrcache_get(last_path, st, &off);
+	*hdrp = hdrcache_get(last_path, &st, &off);
 	if (*hdrp) {
 	    int pos = lseek(Fileno(fd), off, SEEK_SET);
 	    if (pos != off)
@@ -107,7 +107,7 @@ rpmRC rpmReadPackageHeader(FD_t fd, Header *hdrp,
 	    if (realSource == *isSource) {
 		int pos = lseek(Fileno(fd), 0, SEEK_CUR);
 		if (pos > 0)
-		    hdrcache_put(last_path, st, *hdrp, pos);
+		    hdrcache_put(last_path, &st, *hdrp, pos);
 	    }
 	}
     }

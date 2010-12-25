@@ -82,12 +82,12 @@ struct cache_ent {
 };
 
 static
-int make_key(const char *path, struct stat st, char *key)
+int make_key(const char *path, const struct stat *st, char *key)
 {
     const char *bn = strrchr(path, '/');
     bn = bn ? (bn + 1) : path;
     strcpy(key, bn);
-    unsigned sm[2] = { st.st_size, st.st_mtime };
+    unsigned sm[2] = { st->st_size, st->st_mtime };
     int len = strlen(bn);
     memcpy(key + len + 1, sm, sizeof sm);
     return len + 1 + sizeof sm;
@@ -98,7 +98,7 @@ int make_key(const char *path, struct stat st, char *key)
 static
 const int hdrsize_max = (256 << 10);
 
-Header hdrcache_get(const char *path, struct stat st, unsigned *off)
+Header hdrcache_get(const char *path, const struct stat *st, unsigned *off)
 {
     if (initialize() < 0)
 	return NULL;
@@ -158,7 +158,7 @@ Header hdrcache_get(const char *path, struct stat st, unsigned *off)
     return h;
 }
 
-void hdrcache_put(const char *path, struct stat st, Header h, unsigned off)
+void hdrcache_put(const char *path, const struct stat *st, Header h, unsigned off)
 {
     if (initialize() < 0)
 	return;
