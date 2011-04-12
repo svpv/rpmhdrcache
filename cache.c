@@ -14,25 +14,18 @@
 #include <sys/file.h>
 
 #include <db.h>
-#include "db4.h"
+#include "cache.h"
 
 #if DB_VERSION_MAJOR < 4 || (DB_VERSION_MAJOR == 4 && DB_VERSION_MINOR < 4)
 #error "berkeley db 4.4+ required"
 #endif
 
-struct db4env {
+struct cache {
     DB_ENV *env;
+    DB *db;
     int dirfd;
     unsigned umask;
-    struct db4db *db4list;
     char dirname[1];
-};
-
-struct db4db {
-    DB *db;
-    struct db4db *next;
-    unsigned hash;
-    char dbname[1];
 };
 
 #define ERROR(fmt, args...) \
@@ -74,73 +67,61 @@ int isalive(DB_ENV *env, pid_t pid, db_threadid_t tid)
     return 1;
 }
 
-struct db4env *db4env_open(const char *dirname)
+struct cache *cache_open(const char *dir)
 {
     int rc;
 
-    // 1: allocate env
-    struct db4env *env4 = malloc(sizeof(*env4) + strlen(dirname));
-    if (env4 == NULL) {
+    // 1: allocate cache
+    struct cache *cache = malloc(sizeof(*cache) + strlen(dir));
+    if (cache == NULL) {
 	ERROR("malloc: %m");
+    undo0:
 	return NULL;
     }
-    strcpy(env4->dirname, dirname);
-    env4->db4list = NULL;
+    strcpy(cache->dirname, dir);
 
     // 2: allocate env
-    rc = db_env_create(&env4->env, 0);
+    rc = db_env_create(&cache->env, 0);
     if (rc) {
 	ERROR("env_create: %s", db_strerror(rc));
-	// 1
-	free(env4);
-	return NULL;
+    undo1:
+	free(cache);
+	goto undo0;
     }
 
     // configure env
-    env4->env->set_errcall(env4->env, errcall);
-    env4->env->set_msgcall(env4->env, msgcall);
-    env4->env->set_isalive(env4->env, isalive);
-    env4->env->set_thread_count(env4->env, 16);
+    cache->env->set_errcall(cache->env, errcall);
+    cache->env->set_msgcall(cache->env, msgcall);
+    cache->env->set_isalive(cache->env, isalive);
+    cache->env->set_thread_count(cache->env, 16);
 
     // 3: open dir
-    env4->dirfd = open(env4->dirname, O_RDONLY | O_DIRECTORY);
-    if (env4->dirfd < 0) {
-	ERROR("open %s: %m", env4->dirname);
-	// 2
-	env4->env->close(env4->env, 0);
-	// 1
-	free(env4);
-	return NULL;
+    cache->dirfd = open(cache->dirname, O_RDONLY | O_DIRECTORY);
+    if (cache->dirfd < 0) {
+	ERROR("open %s: %m", cache->dirname);
+    undo2:
+	cache->env->close(cache->env, 0);
+	goto undo1;
     }
 
     // initialize umask
     struct stat st;
-    rc = fstat(env4->dirfd, &st);
+    rc = fstat(cache->dirfd, &st);
     if (rc < 0) {
-	ERROR("fstat %s: %m", env4->dirname);
-	// 3
-	close(env4->dirfd);
-	// 2
-	env4->env->close(env4->env, 0);
-	// 1
-	free(env4);
-	return NULL;
+	ERROR("fstat %s: %m", cache->dirname);
+    undo3:
+	close(cache->dirfd);
+	goto undo2;
     }
-    env4->umask = (~st.st_mode & 022);
+    cache->umask = (~st.st_mode & 022);
 
     // 4: lock dir
     do
-	rc = flock(env4->dirfd, LOCK_EX);
+	rc = flock(cache->dirfd, LOCK_EX);
     while (rc < 0 && errno == EINTR);
     if (rc) {
-	ERROR("LOCK_EX %s: %m", env4->dirname);
-	// 3
-	close(env4->dirfd);
-	// 2
-	env4->env->close(env4->env, 0);
-	// 1
-	free(env4);
-	return NULL;
+	ERROR("LOCK_EX %s: %m", cache->dirname);
+	goto undo3;
     }
 
     // 5: block signals
@@ -149,231 +130,130 @@ struct db4env *db4env_open(const char *dirname)
     sigprocmask(SIG_BLOCK, &set, &oldset);
 
     // 6: adjust umask
-    unsigned omask = umask(env4->umask);
+    unsigned omask = umask(cache->umask);
 
-    // open env
-    rc = (env4->env->open)(env4->env, env4->dirname,
+    // 7: open env
+    rc = (cache->env->open)(cache->env, cache->dirname,
 	    DB_CREATE | DB_INIT_CDB | DB_INIT_MPOOL, 0666);
     if (rc) {
-	ERROR("env_open %s: %s", env4->dirname, db_strerror(rc));
-	// 6
-	if (omask != env4->umask)
+	ERROR("env_open %s: %s", cache->dirname, db_strerror(rc));
+    undo654:
+	if (omask != cache->umask)
 	    umask(omask);
-	// 5
 	sigprocmask(SIG_SETMASK, &oldset, NULL);
-	// 4
-	flock(env4->dirfd, LOCK_UN);
-	// 3
-	close(env4->dirfd);
-	// 2
-	env4->env->close(env4->env, 0);
-	// 1
-	free(env4);
-	return NULL;
+	flock(cache->dirfd, LOCK_UN);
+	goto undo3;
     }
 
     // run recovery
-    rc = env4->env->failchk(env4->env, 0);
-
-    // 6, 5, 4
-    if (omask != env4->umask)
-	umask(omask);
-    sigprocmask(SIG_SETMASK, &oldset, NULL);
-    flock(env4->dirfd, LOCK_UN);
-
+    rc = cache->env->failchk(cache->env, 0);
     if (rc) {
-	ERROR("env_failchk %s: %s", env4->dirname, db_strerror(rc));
-	// 3
-	close(env4->dirfd);
-	// 2
-	env4->env->close(env4->env, 0);
-	// 1
-	free(env4);
-	return NULL;
+	ERROR("env_failchk %s: %s", cache->dirname, db_strerror(rc));
+    undo7:
+	cache->env->close(cache->env, 0);
+	goto undo654;
     }
 
-    return env4;
+    // 8: allocate db
+    rc = db_create(&cache->db, cache->env, 0);
+    if (rc) {
+	ERROR("db_create: %s", db_strerror(rc));
+	goto undo7;
+    }
+
+    // open db - this is the final goal
+    rc = cache->db->open(cache->db, NULL, "cache.db", NULL,
+	    DB_HASH, DB_CREATE, 0666);
+    if (rc) {
+	ERROR("db_open %s: %s", cache->dirname, db_strerror(rc));
+    //undo8:
+	cache->db->close(cache->db, 0);
+	goto undo7;
+    }
+
+    // 6, 5, 4 - release protection
+    if (omask != cache->umask)
+	umask(omask);
+    sigprocmask(SIG_SETMASK, &oldset, NULL);
+    flock(cache->dirfd, LOCK_UN);
+
+    return cache;
 }
 
-void db4env_close(struct db4env *env4)
+void cache_close(struct cache *cache)
 {
-    if (env4 == NULL)
+    if (cache == NULL)
 	return;
 
     int rc;
 
     // lock dir
     do
-	rc = flock(env4->dirfd, LOCK_EX);
+	rc = flock(cache->dirfd, LOCK_EX);
     while (rc < 0 && errno == EINTR);
     if (rc)
-	ERROR("LOCK_EX %s: %m", env4->dirname);
+	ERROR("LOCK_EX %s: %m", cache->dirname);
 
     // block signals
     sigset_t set, oldset;
     sigfillset(&set);
     sigprocmask(SIG_BLOCK, &set, &oldset);
 
-    // close databases
-    while (env4->db4list) {
-	struct db4db *db4 = env4->db4list;
-	env4->db4list = db4->next;
-	rc = db4->db->close(db4->db, 0);
-	if (rc)
-	    ERROR("db_close %s: %s", db4->dbname, db_strerror(rc));
-	free(db4);
-    }
+    // close db
+    rc = cache->db->close(cache->db, 0);
+    if (rc)
+	ERROR("db_close %s: %s", cache->dirname, db_strerror(rc));
 
     // close env
-    rc = env4->env->close(env4->env, 0);
+    rc = cache->env->close(cache->env, 0);
     if (rc)
-	ERROR("env_close %s: %s", env4->dirname, db_strerror(rc));
+	ERROR("env_close %s: %s", cache->dirname, db_strerror(rc));
 
     sigprocmask(SIG_SETMASK, &oldset, NULL);
-    flock(env4->dirfd, LOCK_UN);
+    flock(cache->dirfd, LOCK_UN);
 
-    close(env4->dirfd);
-    free(env4);
+    close(cache->dirfd);
+    free(cache);
 }
 
-static inline
-unsigned strhash(const char *str)
-{
-    unsigned h = 5381;
-    unsigned char c;
-    while ((c = *str++))
-	h = h * 33 + c;
-    return h;
-}
-
-struct db4db *db4env_db(struct db4env *env4,
-	const char *dbname, unsigned flags)
-{
-    // see if db is already open
-    unsigned hash = strhash(dbname);
-    struct db4db *db4 = env4->db4list, *prev = NULL;
-    while (db4) {
-	if (hash == db4->hash && strcmp(dbname, db4->dbname) == 0) {
-	    // found, move to front
-	    if (db4 != env4->db4list) {
-		prev->next = db4->next;
-		db4->next = env4->db4list;
-		env4->db4list = db4;
-	    }
-	    return db4;
-	}
-	prev = db4;
-	db4 = db4->next;
-    }
-
-    // 1: allocate db4
-    int len = strlen(dbname);
-    db4 = malloc(sizeof(*db4) + len + sizeof(".db") - 1);
-    if (db4 == NULL) {
-	ERROR("malloc: %m");
-	return NULL;
-    }
-
-    // 2: allocate db
-    int rc = db_create(&db4->db, env4->env, 0);
-    if (rc) {
-	ERROR("db_create: %s", db_strerror(rc));
-	// 1
-	free(db4);
-	return NULL;
-    }
-
-    // prepare filename
-    db4->hash = hash;
-    strcpy(db4->dbname, dbname);
-    strcpy(db4->dbname + len, ".db");
-
-    // lock dir
-    do
-	rc = flock(env4->dirfd, LOCK_EX);
-    while (rc < 0 && errno == EINTR);
-    if (rc) {
-	ERROR("LOCK_EX %s: %m", env4->dirname);
-	// 2
-	db4->db->close(db4->db, 0);
-	// 1
-	free(db4);
-	return NULL;
-    }
-
-    // block signals
-    sigset_t set, oldset;
-    sigfillset(&set);
-    sigprocmask(SIG_BLOCK, &set, &oldset);
-
-    // adjust umask
-    unsigned omask = umask(env4->umask);
-
-    // open db
-    rc = db4->db->open(db4->db, NULL, db4->dbname, NULL,
-	    /*DB_BTREE*/ flags, DB_CREATE, 0666);
-
-    if (omask != env4->umask)
-	umask(omask);
-    sigprocmask(SIG_SETMASK, &oldset, NULL);
-    flock(env4->dirfd, LOCK_UN);
-
-    if (rc) {
-	ERROR("db_open: %s", db_strerror(rc));
-	// 2
-	db4->db->close(db4->db, 0);
-	// 1
-	free(db4);
-	return NULL;
-    }
-
-    // truncate ".db" suffix
-    db4->dbname[len] = '\0';
-
-    // push to front
-    db4->next = env4->db4list;
-    env4->db4list = db4;
-
-    return db4;
-}
-
-bool db4db_get(struct db4db *db4,
+bool cache_get(struct cache *cache,
 	const void *key, int keysize,
-	const void **datap, int *datasizep)
+	void **valp, int *valsizep)
 {
-    DBT k = { (void *)key, keysize }, d = { 0, 0 };
-    int rc = db4->db->get(db4->db, NULL, &k, &d, 0);
+    DBT k = { (void *) key, keysize };
+    DBT v = { NULL, 0 };
+    v.flags = DB_DBT_MALLOC;
+    int rc = cache->db->get(cache->db, NULL, &k, &v, 0);
     if (rc) {
 	if (rc != DB_NOTFOUND)
-	    ERROR("db_get %s: %s", db4->dbname, db_strerror(rc));
+	    ERROR("db_get %s: %s", cache->dirname, db_strerror(rc));
 	return false;
     }
-
-    if (datap)
-	*datap = d.data;
-    if (datasizep)
-	*datasizep = d.size;
+    if (valp)
+	*valp = v.data;
+    else
+	free(v.data);
+    if (valsizep)
+	*valsizep = v.size;
     return true;
 }
 
-bool db4db_put(struct db4db *db4,
+void cache_put(struct cache *cache,
 	const void *key, int keysize,
-	const void *data, int datasize)
+	const void *val, int valsize)
 {
     sigset_t set, oldset;
     sigfillset(&set);
     sigprocmask(SIG_BLOCK, &set, &oldset);
 
-    DBT k = { (void *)key, keysize }, d = { (void *)data, datasize };
-    int rc = db4->db->put(db4->db, NULL, &k, &d, 0);
+    DBT k = { (void *) key, keysize };
+    DBT v = { (void *) val, valsize };
+    int rc = cache->db->put(cache->db, NULL, &k, &v, 0);
 
     sigprocmask(SIG_SETMASK, &oldset, NULL);
 
-    if (rc) {
-	ERROR("db_put %s: %s", db4->dbname, db_strerror(rc));
-	return false;
-    }
-    return true;
+    if (rc)
+	ERROR("db_put %s: %s", cache->dirname, db_strerror(rc));
 }
 
 // ex:ts=8 sts=4 sw=4 noet
