@@ -24,13 +24,38 @@ struct cache {
     DB_ENV *env;
     DB *db;
     int dirfd;
-    unsigned umask;
-    char dirname[1];
+    sigset_t bset, oset;
+    unsigned umask, omask;
 };
 
 #define ERROR(fmt, args...) \
     fprintf(stderr, "%s: %s: " fmt "\n", \
 	    program_invocation_short_name, __func__, ##args)
+
+#define BLOCK_SIGNALS(cache) \
+    if (sigprocmask(SIG_BLOCK, &cache->bset, &cache->oset)) \
+	ERROR("SIG_BLOCK: %m")
+#define UNBLOCK_SIGNALS(cache) \
+    if (sigprocmask(SIG_SETMASK, &cache->oset, NULL)) \
+	ERROR("SIG_SETMASK: %m")
+
+#define LOCK_DIR(cache, op) \
+    {	int rc_; \
+	do \
+	    rc_ = flock(cache->dirfd, op); \
+	while (rc_ < 0 && errno == EINTR); \
+	if (rc_) \
+	    ERROR("%s: %m", #op); \
+    }
+#define UNLOCK_DIR(cache) \
+    if (flock(cache->dirfd, LOCK_UN)) \
+	ERROR("LOCK_UN: %m")
+
+#define SET_UMASK(cache) \
+    cache->omask = umask(cache->umask)
+#define UNSET_UMASK(cache) \
+    if (cache->omask != cache->umask) \
+	umask(cache->omask)
 
 static
 void errcall(const DB_ENV *env, const char *prefix, const char *msg)
@@ -47,135 +72,101 @@ void msgcall(const DB_ENV *env, const char *msg)
     ERROR("%s", msg);
 }
 
-static
-#if DB_VERSION_MAJOR > 4 || (DB_VERSION_MAJOR == 4 && DB_VERSION_MINOR >= 5)
-int isalive(DB_ENV *env, pid_t pid, db_threadid_t tid, u_int32_t flags)
-#else
-int isalive(DB_ENV *env, pid_t pid, db_threadid_t tid)
-#endif
-{
-    (void) env;
-    (void) tid;
-#if DB_VERSION_MAJOR > 4 || (DB_VERSION_MAJOR == 4 && DB_VERSION_MINOR >= 5)
-    (void) flags;
-#endif
-    int rc = kill(pid, 0);
-    if (rc == 0)
-	return 1;
-    if (errno == ESRCH)
-	return 0;
-    return 1;
-}
-
 struct cache *cache_open(const char *dir)
 {
     int rc;
 
-    // 1: allocate cache
+    // allocate cache
     struct cache *cache = malloc(sizeof(*cache) + strlen(dir));
     if (cache == NULL) {
 	ERROR("malloc: %m");
-    undo0:
 	return NULL;
     }
-    strcpy(cache->dirname, dir);
 
-    // 2: allocate env
+    // initialize signals which we will block
+    sigemptyset(&cache->bset);
+    sigaddset(&cache->bset, SIGHUP);
+    sigaddset(&cache->bset, SIGINT);
+    sigaddset(&cache->bset, SIGQUIT);
+    sigaddset(&cache->bset, SIGPIPE);
+    sigaddset(&cache->bset, SIGTERM);
+
+    // allocate env
     rc = db_env_create(&cache->env, 0);
     if (rc) {
 	ERROR("env_create: %s", db_strerror(rc));
-    undo1:
 	free(cache);
-	goto undo0;
+	return NULL;
     }
 
     // configure env
     cache->env->set_errcall(cache->env, errcall);
     cache->env->set_msgcall(cache->env, msgcall);
-    cache->env->set_isalive(cache->env, isalive);
-    cache->env->set_thread_count(cache->env, 16);
+    cache->env->set_cachesize(cache->env, 0, 1 << 20, 1);
 
-    // 3: open dir
-    cache->dirfd = open(cache->dirname, O_RDONLY | O_DIRECTORY);
+    // open dir
+    cache->dirfd = open(dir, O_RDONLY | O_DIRECTORY);
     if (cache->dirfd < 0) {
-	ERROR("open %s: %m", cache->dirname);
-    undo2:
+	// probably ENOENT
+	ERROR("%s: %m", dir);
 	cache->env->close(cache->env, 0);
-	goto undo1;
+	free(cache);
+	return NULL;
     }
 
-    // initialize umask
+    // initialize cache umask
     struct stat st;
     rc = fstat(cache->dirfd, &st);
     if (rc < 0) {
-	ERROR("fstat %s: %m", cache->dirname);
-    undo3:
-	close(cache->dirfd);
-	goto undo2;
+	ERROR("fstat: %m");
+	st.st_mode = 0755;
     }
     cache->umask = (~st.st_mode & 022);
 
-    // 4: lock dir
-    do
-	rc = flock(cache->dirfd, LOCK_EX);
-    while (rc < 0 && errno == EINTR);
+    // enter ciritical section
+    LOCK_DIR(cache, LOCK_EX);
+    BLOCK_SIGNALS(cache);
+    SET_UMASK(cache);
+
+    // open env
+    rc = (cache->env->open)(cache->env, dir,
+	    DB_CREATE | DB_INIT_MPOOL, 0666);
     if (rc) {
-	ERROR("LOCK_EX %s: %m", cache->dirname);
-	goto undo3;
-    }
-
-    // 5: block signals
-    sigset_t set, oldset;
-    sigfillset(&set);
-    sigprocmask(SIG_BLOCK, &set, &oldset);
-
-    // 6: adjust umask
-    unsigned omask = umask(cache->umask);
-
-    // 7: open env
-    rc = (cache->env->open)(cache->env, cache->dirname,
-	    DB_CREATE | DB_INIT_CDB | DB_INIT_MPOOL, 0666);
-    if (rc) {
-	ERROR("env_open %s: %s", cache->dirname, db_strerror(rc));
-    undo654:
-	if (omask != cache->umask)
-	    umask(omask);
-	sigprocmask(SIG_SETMASK, &oldset, NULL);
-	flock(cache->dirfd, LOCK_UN);
-	goto undo3;
-    }
-
-    // run recovery
-    rc = cache->env->failchk(cache->env, 0);
-    if (rc) {
-	ERROR("env_failchk %s: %s", cache->dirname, db_strerror(rc));
-    undo7:
+	ERROR("env_open %s: %s", dir, db_strerror(rc));
+    undo:
+	// env->close combines both close() and free()
+	// in undo, we should close while in critical section
 	cache->env->close(cache->env, 0);
-	goto undo654;
+	// leave critical section
+	UNSET_UMASK(cache);
+	UNBLOCK_SIGNALS(cache);
+	UNLOCK_DIR(cache);
+	// clean up and return
+	close(cache->dirfd);
+	free(cache);
+	return NULL;
     }
 
-    // 8: allocate db
+    // allocate db
     rc = db_create(&cache->db, cache->env, 0);
     if (rc) {
 	ERROR("db_create: %s", db_strerror(rc));
-	goto undo7;
+	goto undo;
     }
 
     // open db - this is the final goal
     rc = cache->db->open(cache->db, NULL, "cache.db", NULL,
 	    DB_HASH, DB_CREATE, 0666);
     if (rc) {
-	ERROR("db_open %s: %s", cache->dirname, db_strerror(rc));
-    //undo8:
+	ERROR("db_open: %s", db_strerror(rc));
 	cache->db->close(cache->db, 0);
-	goto undo7;
+	goto undo;
     }
 
-    // 6, 5, 4 - release protection
-    if (omask != cache->umask)
-	umask(omask);
-    sigprocmask(SIG_SETMASK, &oldset, NULL);
-    flock(cache->dirfd, LOCK_UN);
+    // leave critical section
+    UNSET_UMASK(cache);
+    UNBLOCK_SIGNALS(cache);
+    UNLOCK_DIR(cache);
 
     return cache;
 }
@@ -187,30 +178,21 @@ void cache_close(struct cache *cache)
 
     int rc;
 
-    // lock dir
-    do
-	rc = flock(cache->dirfd, LOCK_EX);
-    while (rc < 0 && errno == EINTR);
-    if (rc)
-	ERROR("LOCK_EX %s: %m", cache->dirname);
-
-    // block signals
-    sigset_t set, oldset;
-    sigfillset(&set);
-    sigprocmask(SIG_BLOCK, &set, &oldset);
+    LOCK_DIR(cache, LOCK_EX);
+    BLOCK_SIGNALS(cache);
 
     // close db
     rc = cache->db->close(cache->db, 0);
     if (rc)
-	ERROR("db_close %s: %s", cache->dirname, db_strerror(rc));
+	ERROR("db_close: %s", db_strerror(rc));
 
     // close env
     rc = cache->env->close(cache->env, 0);
     if (rc)
-	ERROR("env_close %s: %s", cache->dirname, db_strerror(rc));
+	ERROR("env_close: %s", db_strerror(rc));
 
-    sigprocmask(SIG_SETMASK, &oldset, NULL);
-    flock(cache->dirfd, LOCK_UN);
+    UNBLOCK_SIGNALS(cache);
+    UNLOCK_DIR(cache);
 
     close(cache->dirfd);
     free(cache);
@@ -223,10 +205,21 @@ bool cache_get(struct cache *cache,
     DBT k = { (void *) key, keysize };
     DBT v = { NULL, 0 };
     v.flags = DB_DBT_MALLOC;
+
+    // read lock
+    LOCK_DIR(cache, LOCK_SH);
+
+    // db->get can trigger mpool->put
+    BLOCK_SIGNALS(cache);
+
     int rc = cache->db->get(cache->db, NULL, &k, &v, 0);
+
+    UNBLOCK_SIGNALS(cache);
+    UNLOCK_DIR(cache);
+
     if (rc) {
 	if (rc != DB_NOTFOUND)
-	    ERROR("db_get %s: %s", cache->dirname, db_strerror(rc));
+	    ERROR("db_get: %s", db_strerror(rc));
 	return false;
     }
     if (valp)
@@ -242,18 +235,19 @@ void cache_put(struct cache *cache,
 	const void *key, int keysize,
 	const void *val, int valsize)
 {
-    sigset_t set, oldset;
-    sigfillset(&set);
-    sigprocmask(SIG_BLOCK, &set, &oldset);
-
     DBT k = { (void *) key, keysize };
     DBT v = { (void *) val, valsize };
+
+    LOCK_DIR(cache, LOCK_EX);
+    BLOCK_SIGNALS(cache);
+
     int rc = cache->db->put(cache->db, NULL, &k, &v, 0);
 
-    sigprocmask(SIG_SETMASK, &oldset, NULL);
+    UNBLOCK_SIGNALS(cache);
+    UNLOCK_DIR(cache);
 
     if (rc)
-	ERROR("db_put %s: %s", cache->dirname, db_strerror(rc));
+	ERROR("db_put: %s", db_strerror(rc));
 }
 
 // ex:ts=8 sts=4 sw=4 noet
