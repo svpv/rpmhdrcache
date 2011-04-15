@@ -72,6 +72,23 @@ void msgcall(const DB_ENV *env, const char *msg)
     ERROR("%s", msg);
 }
 
+#include <openssl/sha.h>
+
+// All user keys are hashed with sha1, and sha1 sum is then used as db key.
+// To avoid double hashing, we also use part of sha1 sum as internal db hash.
+static
+unsigned h_hash(DB *db, const void *key, unsigned keysize)
+{
+    (void) db;
+    if (keysize == 20)
+	return *(unsigned *) key;
+
+    // handle CHARKEY test string and possibly other data
+    unsigned char sha1[20] __attribute__((aligned(4)));
+    SHA1(key, keysize, sha1);
+    return *(unsigned *) sha1;
+}
+
 struct cache *cache_open(const char *dir)
 {
     int rc;
@@ -154,6 +171,9 @@ struct cache *cache_open(const char *dir)
 	goto undo;
     }
 
+    // configure db
+    cache->db->set_h_hash(cache->db, h_hash);
+
     // open db - this is the final goal
     rc = cache->db->open(cache->db, NULL, "cache.db", NULL,
 	    DB_HASH, DB_CREATE, 0666);
@@ -202,7 +222,10 @@ bool cache_get(struct cache *cache,
 	const void *key, int keysize,
 	void **valp, int *valsizep)
 {
-    DBT k = { (void *) key, keysize };
+    unsigned char sha1[20] __attribute__((aligned(4)));
+    SHA1(key, keysize, sha1);
+
+    DBT k = { sha1, 20 };
     DBT v = { NULL, 0 };
     v.flags = DB_DBT_MALLOC;
 
@@ -235,7 +258,10 @@ void cache_put(struct cache *cache,
 	const void *key, int keysize,
 	const void *val, int valsize)
 {
-    DBT k = { (void *) key, keysize };
+    unsigned char sha1[20] __attribute__((aligned(4)));
+    SHA1(key, keysize, sha1);
+
+    DBT k = { sha1, 20 };
     DBT v = { (void *) val, valsize };
 
     LOCK_DIR(cache, LOCK_EX);
