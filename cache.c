@@ -26,6 +26,7 @@ struct cache {
     int dirfd;
     sigset_t bset, oset;
     unsigned umask, omask;
+    unsigned short now;
 };
 
 #define ERROR(fmt, args...) \
@@ -107,6 +108,9 @@ struct cache *cache_open(const char *dir)
     sigaddset(&cache->bset, SIGQUIT);
     sigaddset(&cache->bset, SIGPIPE);
     sigaddset(&cache->bset, SIGTERM);
+
+    // initialize timestamp
+    cache->now = time(NULL) / 3600 / 24;
 
     // allocate env
     rc = db_env_create(&cache->env, 0);
@@ -218,16 +222,40 @@ void cache_close(struct cache *cache)
     free(cache);
 }
 
+// Fast compression and decompression from Google.
+#include <snappy-c.h>
+
+// Values with compressed size larger than this will be backed by fs.
+#define MAX_DB_VAL_SIZE (64 << 10)
+
+struct cache_ent {
+#define V_SNAPPY (1 << 0)
+    unsigned short flags;
+    unsigned short mtime;
+    unsigned short atime;
+    unsigned short pad;
+};
+
 bool cache_get(struct cache *cache,
 	const void *key, int keysize,
 	void **valp, int *valsizep)
 {
+    if (valp)
+	*valp = NULL;
+    if (valsizep)
+	*valsizep = 0;
+
     unsigned char sha1[20] __attribute__((aligned(4)));
     SHA1(key, keysize, sha1);
-
     DBT k = { sha1, 20 };
-    DBT v = { NULL, 0 };
-    v.flags = DB_DBT_MALLOC;
+
+    char vbuf[sizeof(struct cache_ent) + MAX_DB_VAL_SIZE] __attribute__((aligned(4)));
+    DBT v = { vbuf, 0 };
+    v.ulen = sizeof(vbuf);
+    v.flags |= DB_DBT_USERMEM;
+
+    struct cache_ent *vent = (void *) vbuf;
+    int ventsize = 0;
 
     // read lock
     LOCK_DIR(cache, LOCK_SH);
@@ -240,17 +268,81 @@ bool cache_get(struct cache *cache,
     UNBLOCK_SIGNALS(cache);
     UNLOCK_DIR(cache);
 
+    if (rc == 0)
+	ventsize = v.size;
+
+    if (rc && rc != DB_NOTFOUND)
+	ERROR("db_get: %s", db_strerror(rc));
+
+    if (rc == 0 && vent->atime < cache->now) {
+	// TODO: update atime
+    }
+
     if (rc) {
-	if (rc != DB_NOTFOUND)
-	    ERROR("db_get: %s", db_strerror(rc));
+	// TODO: fs get via mmap
+	// set vent and ventsize
+    }
+
+    if (rc)
+	return false;
+
+    // validate
+    if (ventsize < sizeof(*vent)) {
+	ERROR("vent too small");
+    munmap:
+	if (vent != (void *) vbuf) {
+	    // TODO: munmap
+	}
 	return false;
     }
-    if (valp)
-	*valp = v.data;
-    else
-	free(v.data);
-    if (valsizep)
-	*valsizep = v.size;
+
+    // prepare for return
+    if (vent->flags & V_SNAPPY) {
+	// uncompress
+	int csize = ventsize - sizeof(*vent);
+	size_t usize;
+	if (snappy_uncompressed_length(vent + 1, csize, &usize)) {
+	    ERROR("snappy_uncompressed_length: invalid data");
+	    goto munmap;
+	}
+	if (valp) {
+	    if ((*valp = malloc(usize)) == NULL) {
+		ERROR("malloc: %m");
+		goto munmap;
+	    }
+	    if (snappy_uncompress(vent + 1, csize, *valp, &usize)) {
+		ERROR("snappy_uncompress: invalid data");
+		free(*valp);
+		*valp = NULL;
+		goto munmap;
+	    }
+	}
+	else {
+	    if (snappy_validate_compressed_buffer(vent + 1, csize)) {
+		ERROR("snappy_validate_compressed_buffer: invalid data");
+		goto munmap;
+	    }
+	}
+	if (valsizep)
+	    *valsizep = usize;
+    }
+    else {
+	int size = ventsize - sizeof(*vent);
+	if (valp) {
+	    if ((*valp = malloc(size)) == NULL) {
+		ERROR("malloc: %m");
+		goto munmap;
+	    }
+	    memcpy(*valp, vent + 1, size);
+	}
+	if (valsizep)
+	    *valsizep = size;
+    }
+
+    if (vent != (void *) vbuf) {
+	// TODO: munmap
+    }
+
     return true;
 }
 
@@ -261,19 +353,54 @@ void cache_put(struct cache *cache,
     unsigned char sha1[20] __attribute__((aligned(4)));
     SHA1(key, keysize, sha1);
 
-    DBT k = { sha1, 20 };
-    DBT v = { (void *) val, valsize };
+    int max_csize = snappy_max_compressed_length(valsize);
+    struct cache_ent *vent = malloc(sizeof(*vent) + max_csize);
+    if (vent == NULL) {
+	ERROR("malloc: %m");
+	return;
+    }
+    vent->flags = 0;
+    vent->atime = 0;
+    vent->mtime = 0;
+    vent->pad = 0;
+    int ventsize;
+    size_t csize = max_csize;
+    if (snappy_compress(val, valsize, vent + 1, &csize)) {
+	ERROR("snappy_compress: error");
+    uncompressed:
+	memcpy(vent + 1, val, valsize);
+	ventsize = sizeof(*vent) + valsize;
+    }
+    else if (csize >= valsize)
+	goto uncompressed;
+    else {
+	vent->flags |= V_SNAPPY;
+	ventsize = sizeof(*vent) + csize;
+    }
 
-    LOCK_DIR(cache, LOCK_EX);
-    BLOCK_SIGNALS(cache);
+    if (ventsize - sizeof(*vent) <= MAX_DB_VAL_SIZE) {
+	// db put
+	DBT k = { sha1, 20 };
+	DBT v = { vent, ventsize };
+	vent->mtime = cache->now;
+	vent->atime = cache->now;
 
-    int rc = cache->db->put(cache->db, NULL, &k, &v, 0);
+	LOCK_DIR(cache, LOCK_EX);
+	BLOCK_SIGNALS(cache);
 
-    UNBLOCK_SIGNALS(cache);
-    UNLOCK_DIR(cache);
+	int rc = cache->db->put(cache->db, NULL, &k, &v, 0);
 
-    if (rc)
-	ERROR("db_put: %s", db_strerror(rc));
+	UNBLOCK_SIGNALS(cache);
+	UNLOCK_DIR(cache);
+
+	if (rc)
+	    ERROR("db_put: %s", db_strerror(rc));
+
+	free(vent);
+	return;
+    }
+
+    // TODO: fs put
 }
 
 // ex:ts=8 sts=4 sw=4 noet
