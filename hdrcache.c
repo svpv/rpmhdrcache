@@ -8,15 +8,15 @@
 #include <rpm/rpmlib.h>
 #include <lzo/lzo1x.h>
 #include "hdrcache.h"
-#include "db4.h"
+#include "kcdb.h"
 
 static __thread
-struct db4env *env4;
+struct kcdbenv *env4;
 
 static
 void finalize()
 {
-    db4env_close(env4);
+    kcdbenv_close(env4);
 }
 
 static inline
@@ -50,7 +50,7 @@ int initialize()
     const char *dir = opt("DIR");
     if (dir == NULL)
 	dir = "/tmp/.rpmhdrcache";
-    env4 = db4env_open(dir);
+    env4 = kcdbenv_open(dir);
     if (env4 == NULL) {
 	initialized = -1;
 	return initialized;
@@ -116,14 +116,14 @@ Header hdrcache_get(const char *path, const struct stat *st, unsigned *off)
     }
     if (arch == NULL)
 	arch = "rpm";
-    struct db4db *db4 = db4env_db(env4, arch, DB4_BTREE);
-    if (db4 == NULL)
+    struct kcdbdb *kcdb = kcdbenv_db(env4, arch);
+    if (kcdb == NULL)
 	return NULL;
     if (dot)
 	*dot = '.';
     struct cache_ent *data;
     int datasize;
-    bool got = db4db_get(db4, key, keysize, &data, &datasize);
+    bool got = kcdbdb_get(kcdb, key, keysize, &data, &datasize);
     if (!got)
 	return NULL;
     if ((data->vflags & (V_ZBIT | V_RSV)) != V_RSV)
@@ -134,7 +134,7 @@ Header hdrcache_get(const char *path, const struct stat *st, unsigned *off)
 	(data->atime == 1 && data->mtime < now))
     {
 	data->atime = now;
-	db4db_put(db4, key, keysize, data, datasize);
+	kcdbdb_put(kcdb, key, keysize, data, datasize);
     }
     void *blob = data->blob;
     char ublob[hdrsize_max];
@@ -175,8 +175,8 @@ void hdrcache_put(const char *path, const struct stat *st, Header h, unsigned of
     }
     if (arch == NULL)
 	arch = "rpm";
-    struct db4db *db4 = db4env_db(env4, arch, DB4_BTREE);
-    if (db4 == NULL)
+    struct kcdbdb *kcdb = kcdbenv_db(env4, arch);
+    if (kcdb == NULL)
 	return;
     if (dot)
 	*dot = '.';
@@ -210,7 +210,7 @@ void hdrcache_put(const char *path, const struct stat *st, Header h, unsigned of
 	datasize = sizeof(struct cache_ent) - 1 + hdrsize;
     }
     free(blob);
-    db4db_put(db4, key, keysize, data, datasize);
+    kcdbdb_put(kcdb, key, keysize, data, datasize);
 }
 
 // ex: set ts=8 sts=4 sw=4 noet:
