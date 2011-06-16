@@ -8,15 +8,15 @@
 #include <rpm/rpmlib.h>
 #include <lzo/lzo1x.h>
 #include "hdrcache.h"
-#include "kcdb.h"
+#include "mcdb.h"
 
 static __thread
-struct kcdbenv *env4;
+struct mcdbenv *env;
 
 static
 void finalize()
 {
-    kcdbenv_close(env4);
+    mcdbenv_close(env);
 }
 
 static inline
@@ -47,11 +47,11 @@ int initialize()
     }
     if (opt("NOATIME"))
 	noatime = true;
-    const char *dir = opt("DIR");
-    if (dir == NULL)
-	dir = "/tmp/.rpmhdrcache";
-    env4 = kcdbenv_open(dir);
-    if (env4 == NULL) {
+    const char *configstring = opt("CONFIGSTRING");
+    if (configstring == NULL)
+	configstring = "--SERVER=localhost";
+    env = mcdbenv_open(configstring);
+    if (env == NULL) {
 	initialized = -1;
 	return initialized;
     }
@@ -86,11 +86,8 @@ int make_key(const char *path, const struct stat *st, char *key)
 {
     const char *bn = strrchr(path, '/');
     bn = bn ? (bn + 1) : path;
-    strcpy(key, bn);
-    unsigned sm[2] = { st->st_size, st->st_mtime };
-    int len = strlen(bn);
-    memcpy(key + len + 1, sm, sizeof sm);
-    return len + 1 + sizeof sm;
+    sprintf(key, "%s|%lu|%ld", bn, st->st_size, st->st_mtime);
+    return strlen(key);
 }
 
 #include <stdio.h>
@@ -104,26 +101,9 @@ Header hdrcache_get(const char *path, const struct stat *st, unsigned *off)
 	return NULL;
     char key[4096];
     int keysize = make_key(path, st, key);
-    // for n-v-r.arch.rpm, dbname will be arch
-    const char *arch = NULL;
-    char *dot = strrchr(key, '.');
-    if (dot) {
-	*dot = '\0';
-	arch = strrchr(key, '.');
-	if (arch)
-	    if (++arch == dot)
-		arch = NULL;
-    }
-    if (arch == NULL)
-	arch = "rpm";
-    struct kcdbdb *kcdb = kcdbenv_db(env4, arch);
-    if (kcdb == NULL)
-	return NULL;
-    if (dot)
-	*dot = '.';
     struct cache_ent *data;
-    int datasize;
-    bool got = kcdbdb_get(kcdb, key, keysize, &data, &datasize);
+    size_t datasize;
+    bool got = mcdb_get(env, key, keysize, (const void **)&data, &datasize);
     if (!got)
 	return NULL;
     if ((data->vflags & (V_ZBIT | V_RSV)) != V_RSV)
@@ -134,7 +114,7 @@ Header hdrcache_get(const char *path, const struct stat *st, unsigned *off)
 	(data->atime == 1 && data->mtime < now))
     {
 	data->atime = now;
-	kcdbdb_put(kcdb, key, keysize, data, datasize);
+	mcdb_put(env, key, keysize, data, datasize);
     }
     void *blob = data->blob;
     char ublob[hdrsize_max];
@@ -164,22 +144,6 @@ void hdrcache_put(const char *path, const struct stat *st, Header h, unsigned of
 	return;
     char key[4096];
     int keysize = make_key(path, st, key);
-    const char *arch = NULL;
-    char *dot = strrchr(key, '.');
-    if (dot) {
-	*dot = '\0';
-	arch = strrchr(key, '.');
-	if (arch)
-	    if (++arch == dot)
-		arch = NULL;
-    }
-    if (arch == NULL)
-	arch = "rpm";
-    struct kcdbdb *kcdb = kcdbenv_db(env4, arch);
-    if (kcdb == NULL)
-	return;
-    if (dot)
-	*dot = '.';
     int hdrsize = headerSizeof(h, HEADER_MAGIC_NO);
     if (hdrsize < 1 || hdrsize > hdrsize_max)
 	return;
@@ -210,7 +174,7 @@ void hdrcache_put(const char *path, const struct stat *st, Header h, unsigned of
 	datasize = sizeof(struct cache_ent) - 1 + hdrsize;
     }
     free(blob);
-    kcdbdb_put(kcdb, key, keysize, data, datasize);
+    mcdb_put(env, key, keysize, data, datasize);
 }
 
 // ex: set ts=8 sts=4 sw=4 noet:

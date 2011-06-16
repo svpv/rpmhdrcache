@@ -1,6 +1,6 @@
 Name: rpmhdrcache
 Version: 0.1
-Release: alt0.1
+Release: alt0.2
 
 Summary: Cached reading of rpm package headers
 License: GPLv2+
@@ -30,5 +30,5 @@ install -pD -m644 rpmhdrcache.so %buildroot%_libdir/rpmhdrcache.so
 
 %changelog
 * Fri Jun 10 2011 Vitaly Kuznetsov <vitty@altlinux.ru> 0.1-alt0.1
-- quick&dirty implementation using kyotocabinet
+- implementation using memcached
 
