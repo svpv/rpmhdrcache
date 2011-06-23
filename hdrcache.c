@@ -87,7 +87,7 @@ Header hdrcache_get(const char *path, const struct stat *st, unsigned *off)
     int datasize;
     if (!cache_get(cache, key, keysize, (void **) &data, &datasize))
 	return NULL;
-    Header h = headerLoad(data->blob);
+    Header h = headerCopyLoad(data->blob);
     if (h == NULL) {
 	ERROR("%s: headerLoad failed", key);
 	return NULL;
