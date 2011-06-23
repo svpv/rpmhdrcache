@@ -34,7 +34,6 @@ FD_t last_fd;
 static __thread
 struct stat last_st;
 
-__attribute__((visibility("default"),externally_visible))
 FD_t Fopen(const char *path, const char *fmode)
 {
     last_path = _free(last_path);
@@ -58,7 +57,6 @@ FD_t Fopen(const char *path, const char *fmode)
 
 #include "hdrcache.h"
 
-__attribute__((visibility("default"),externally_visible))
 rpmRC rpmReadPackageHeader(FD_t fd, Header *hdrp,
 	int *isSource, int *major, int *minor)
 {
