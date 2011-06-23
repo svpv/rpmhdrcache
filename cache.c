@@ -222,6 +222,32 @@ void cache_close(struct cache *cache)
     free(cache);
 }
 
+// Convert 20-byte sha1 to "XX/YYY..." filename.
+static
+void sha1_filename(const unsigned char *sha1, char *fname, bool tmp)
+{
+    static const char hex[] = "0123456789abcdef";
+    inline
+    void sha1_byte()
+    {
+	*fname++ = hex[*sha1 & 0x0f];
+	*fname++ = hex[*sha1++ >> 4];
+    }
+    sha1_byte();
+    *fname++ = '/';
+    int i;
+    for (i = 1; i < 20; i++)
+	sha1_byte();
+    if (tmp) {
+	*fname++ = '.';
+	int rnd = rand();
+	sha1 = (const unsigned char *) &rnd;
+	for (i = 0; i < 4; i++)
+	    sha1_byte();
+    }
+    *fname = '\0';
+}
+
 // Fast compression and decompression from Google.
 #include <snappy-c.h>
 
@@ -235,6 +261,9 @@ struct cache_ent {
     unsigned short atime;
     unsigned short pad;
 };
+
+// Will use mmap for fs get and fs put.
+#include <sys/mman.h>
 
 bool cache_get(struct cache *cache,
 	const void *key, int keysize,
@@ -279,19 +308,39 @@ bool cache_get(struct cache *cache,
     }
 
     if (rc) {
-	// TODO: fs get via mmap
-	// set vent and ventsize
+	// fs get
+	char fname[42];
+	sha1_filename(sha1, fname, false);
+	int fd = openat(cache->dirfd, fname, O_RDONLY);
+	if (fd < 0) {
+	    if (errno != ENOENT)
+		ERROR("openat: %m");
+	    return false;
+	}
+	struct stat st;
+	rc = fstat(fd, &st);
+	if (rc < 0) {
+	    ERROR("fstat: %m");
+	    return false;
+	}
+	ventsize = st.st_size;
+	vent = mmap(NULL, ventsize, PROT_READ, MAP_SHARED, fd, 0);
+	if (vent == MAP_FAILED) {
+	    ERROR("mmap: %m");
+	    close(fd);
+	    return false;
+	}
+	close(fd);
     }
-
-    if (rc)
-	return false;
 
     // validate
     if (ventsize < sizeof(*vent)) {
 	ERROR("vent too small");
     munmap:
 	if (vent != (void *) vbuf) {
-	    // TODO: munmap
+	    rc = munmap(vent, ventsize);
+	    if (rc < 0)
+		ERROR("munmap: %m");
 	}
 	return false;
     }
@@ -340,7 +389,9 @@ bool cache_get(struct cache *cache,
     }
 
     if (vent != (void *) vbuf) {
-	// TODO: munmap
+	rc = munmap(vent, ventsize);
+	if (rc < 0)
+	    ERROR("munmap: %m");
     }
 
     return true;
@@ -350,6 +401,8 @@ void cache_put(struct cache *cache,
 	const void *key, int keysize,
 	const void *val, int valsize)
 {
+    int rc;
+
     unsigned char sha1[20] __attribute__((aligned(4)));
     SHA1(key, keysize, sha1);
 
@@ -388,7 +441,7 @@ void cache_put(struct cache *cache,
 	LOCK_DIR(cache, LOCK_EX);
 	BLOCK_SIGNALS(cache);
 
-	int rc = cache->db->put(cache->db, NULL, &k, &v, 0);
+	rc = cache->db->put(cache->db, NULL, &k, &v, 0);
 
 	UNBLOCK_SIGNALS(cache);
 	UNLOCK_DIR(cache);
@@ -400,7 +453,55 @@ void cache_put(struct cache *cache,
 	return;
     }
 
-    // TODO: fs put
+    // fs put: open tmp file
+    char fname[51];
+    sha1_filename(sha1, fname, true);
+    fname[2] = '\0';
+    SET_UMASK(cache);
+    rc = mkdirat(cache->dirfd, fname, 0777);
+    if (rc < 0 && errno != EEXIST)
+	ERROR("mkdirat: %m");
+    fname[2] = '/';
+    int fd = openat(cache->dirfd, fname, O_RDWR | O_CREAT | O_EXCL, 0666);
+    if (fd < 0) {
+	ERROR("openat: %m");
+	UNSET_UMASK(cache);
+	free(vent);
+	return;
+    }
+    UNSET_UMASK(cache);
+
+    // extend and mmap for write
+    rc = ftruncate(fd, ventsize);
+    if (rc < 0) {
+	ERROR("ftruncate: %m");
+	close(fd);
+	free(vent);
+	return;
+    }
+    void *dest = mmap(NULL, ventsize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (dest == MAP_FAILED) {
+	ERROR("mmap: %m");
+	close(fd);
+	free(vent);
+	return;
+    }
+    close(fd);
+
+    // write data
+    memcpy(dest, vent, ventsize);
+    rc = munmap(dest, ventsize);
+    if (rc < 0)
+	ERROR("munmap: %m");
+    free(vent);
+
+    // move to permanent location
+    char outfname[42];
+    memcpy(outfname, fname, 41);
+    outfname[41] = '\0';
+    rc = renameat(cache->dirfd, fname, cache->dirfd, outfname);
+    if (rc < 0)
+	ERROR("renameat: %m");
 }
 
 // ex:ts=8 sts=4 sw=4 noet
