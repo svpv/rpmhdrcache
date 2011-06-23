@@ -120,6 +120,7 @@ void hdrcache_put(const char *path, const struct stat *st, Header h, unsigned of
     memcpy(data->blob, blob, blobsize);
     free(blob);
     cache_put(cache, key, keysize, data, datasize);
+    free(data);
 }
 
 // ex: set ts=8 sts=4 sw=4 noet:
