@@ -504,4 +504,9 @@ void cache_put(struct cache *cache,
 	ERROR("renameat: %m");
 }
 
+void cache_clean(struct cache *cache, int days)
+{
+    // TODO: clean
+}
+
 // ex:ts=8 sts=4 sw=4 noet
