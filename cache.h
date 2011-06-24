@@ -13,6 +13,12 @@ void cache_close(struct cache *cache);
 #include <stdbool.h>
 #endif
 
+/*
+ * Note that it is possible to store empty values by specifying valsize = 0
+ * argument to cache_put (val is ignored in this case).  When fetching empty
+ * value, cache_get returns true with *valsizep set to 0 and *valp set to NULL.
+ */
+
 bool cache_get(struct cache *cache,
 	const void *key, int keysize,
 	void **valp /* malloc'd */, int *valsizep);

@@ -377,7 +377,7 @@ bool cache_get(struct cache *cache,
     }
     else {
 	int size = ventsize - sizeof(*vent);
-	if (valp) {
+	if (size && valp) {
 	    if ((*valp = malloc(size)) == NULL) {
 		ERROR("malloc: %m");
 		goto munmap;
