@@ -355,7 +355,7 @@ bool cache_get(struct cache *cache,
 	    goto munmap;
 	}
 	if (valp) {
-	    if ((*valp = malloc(usize)) == NULL) {
+	    if ((*valp = malloc(usize + 1)) == NULL) {
 		ERROR("malloc: %m");
 		goto munmap;
 	    }
@@ -365,6 +365,7 @@ bool cache_get(struct cache *cache,
 		*valp = NULL;
 		goto munmap;
 	    }
+	    ((char *) *valp)[usize] = '\0';
 	}
 	else {
 	    if (snappy_validate_compressed_buffer(vent + 1, csize)) {
@@ -378,11 +379,12 @@ bool cache_get(struct cache *cache,
     else {
 	int size = ventsize - sizeof(*vent);
 	if (size && valp) {
-	    if ((*valp = malloc(size)) == NULL) {
+	    if ((*valp = malloc(size + 1)) == NULL) {
 		ERROR("malloc: %m");
 		goto munmap;
 	    }
 	    memcpy(*valp, vent + 1, size);
+	    ((char *) *valp)[size] = '\0';
 	}
 	if (valsizep)
 	    *valsizep = size;
