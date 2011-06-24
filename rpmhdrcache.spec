@@ -1,6 +1,6 @@
 Name: rpmhdrcache
-Version: 0.1
-Release: alt0
+Version: 0.2
+Release: alt1
 
 Summary: Cached reading of rpm package headers
 License: GPLv2+
@@ -67,3 +67,13 @@ are stored in a Berkeley DB, larger entries are backed by filesystem.
 %dir %_includedir/qa
 %_includedir/qa/cache.h
 %_libdir/libqacache.so
+
+%changelog
+* Fri Jun 24 2011 Alexey Tourbin <at@altlinux.ru> 0.2-alt1
+- version 0.1 was not released properly
+- factored libqacache library (similar to qa::cache perl module)
+- replaced LZO compression with snappy
+- replaced CDS with dir flock
+- replaced Btree with SHA1-based hash DB
+- implemented filesystem-backed store for large cache entries
+- atime update and cleanup not cooked up yet
