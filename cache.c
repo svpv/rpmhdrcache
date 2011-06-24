@@ -252,7 +252,7 @@ void sha1_filename(const unsigned char *sha1, char *fname, bool tmp)
 #include <snappy-c.h>
 
 // Values with compressed size larger than this will be backed by fs.
-#define MAX_DB_VAL_SIZE (64 << 10)
+#define MAX_DB_VAL_SIZE (32 << 10)
 
 struct cache_ent {
 #define V_SNAPPY (1 << 0)
