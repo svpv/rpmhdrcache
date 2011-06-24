@@ -15,6 +15,11 @@ Requires: libqacache = %version-%release
 BuildRequires: libdb4-devel librpm-devel libsnappy-devel libssl-devel
 
 %description
+Sisyphus repository currently has more than 10K source packages (which is
+more than 60K rpm files with subpackages).  To assist repeated repo scanning
+(which is required for each repo update), this package provides rpmhdrcache.so
+perloadable module.  This module intercepts rpmReadPackageHeader calls and
+caches the result using libqacache library.
 
 %prep
 %setup -q
@@ -44,7 +49,16 @@ Group: Development/C
 Requires: libqacache = %version-%release
 
 %description -n libqacache
+This library implements simple key-value cache API with limited support
+for concurrent reads, atomic writes, data integrity, and atime cleanup.
+Small- to medium-sized cache entries (up to 32K compressed with snappy)
+are stored in a Berkeley DB, larger entries are backed by filesystem.
+
 %description -n libqacache-devel
+This library implements simple key-value cache API with limited support
+for concurrent reads, atomic writes, data integrity, and atime cleanup.
+Small- to medium-sized cache entries (up to 32K compressed with snappy)
+are stored in a Berkeley DB, larger entries are backed by filesystem.
 
 %files -n libqacache
 %_libdir/libqacache.so.0
