@@ -1,6 +1,6 @@
 Name: rpmhdrmemcache
 Version: 0.1.1
-Release: alt1
+Release: alt2
 
 Summary: Cached reading of rpm package headers
 License: GPLv2+
@@ -17,7 +17,7 @@ Sisyphus repository currently has more than 10K source packages (which is
 more than 60K rpm files with subpackages).  To assist repeated repo scanning
 (which is required for each repo update), this package provides rpmhdrcache.so
 perloadable module.  This module intercepts rpmReadPackageHeader calls and
-caches the result using libqacache library.
+caches the result using memcached.
 
 %prep
 %setup -q
@@ -34,5 +34,8 @@ install -pD -m644 rpmhdrmemcache.so %buildroot%_libdir/rpmhdrmemcache.so
 %_libdir/rpmhdrmemcache.so
 
 %changelog
+* Mon Jun 27 2011 Vitaly Kuznetsov <vitty@altlinux.ru> 0.1.1-alt2
+- fix description
+
 * Mon Jun 27 2011 Vitaly Kuznetsov <vitty@altlinux.ru> 0.1.1-alt1
 - implementation using memcached
