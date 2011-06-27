@@ -1,1 +1,1 @@
-tar: . name=rpmhdrcache-@version@
+tar: . name=rpmhdrmemcache-@version@

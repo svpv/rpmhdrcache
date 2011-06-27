@@ -26,7 +26,7 @@ const char *opt_(const char *name)
     return (str && *str) ? str : NULL;
 }
 
-#define opt(name) opt_("RPMHDRCACHE_" name)
+#define opt(name) opt_("RPMHDRMEMCACHE_" name)
 
 static __thread
 unsigned short now; // binary days since the epoch
