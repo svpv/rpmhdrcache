@@ -454,6 +454,21 @@ void cache_put(struct cache *cache,
 	free(vent);
 	return;
     }
+    else {
+	// db del
+	DBT k = { sha1, 20 };
+
+	LOCK_DIR(cache, LOCK_EX);
+	BLOCK_SIGNALS(cache);
+
+	rc = cache->db->del(cache->db, NULL, &k, 0);
+
+	UNBLOCK_SIGNALS(cache);
+	UNLOCK_DIR(cache);
+
+	if (rc && rc != DB_NOTFOUND)
+	    ERROR("db_del: %s", db_strerror(rc));
+    }
 
     // fs put: open tmp file
     char fname[51];
