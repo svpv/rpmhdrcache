@@ -303,10 +303,6 @@ bool cache_get(struct cache *cache,
     if (rc && rc != DB_NOTFOUND)
 	ERROR("db_get: %s", db_strerror(rc));
 
-    if (rc == 0 && vent->atime < cache->now) {
-	// TODO: update atime
-    }
-
     if (rc) {
 	// fs get
 	char fname[42];
@@ -343,6 +339,35 @@ bool cache_get(struct cache *cache,
 		ERROR("munmap: %m");
 	}
 	return false;
+    }
+
+    // update db atime
+    if (vent == (void *) vbuf && vent->atime < cache->now) {
+	LOCK_DIR(cache, LOCK_EX);
+	BLOCK_SIGNALS(cache);
+
+	// partial update, user data unchanged
+	v.flags |= DB_DBT_PARTIAL;
+	v.dlen = sizeof(*vent);
+
+	// the record must be still there
+	rc = cache->db->get(cache->db, NULL, &k, &v, DB_GET_BOTH);
+	if (rc) {
+	    UNBLOCK_SIGNALS(cache);
+	    UNLOCK_DIR(cache);
+	    if (rc != DB_NOTFOUND)
+		ERROR("db_get: %s", db_strerror(rc));
+	}
+	else {
+	    // actual update
+	    v.size = sizeof(*vent);
+	    vent->atime = cache->now;
+	    rc = cache->db->put(cache->db, NULL, &k, &v, 0);
+	    UNBLOCK_SIGNALS(cache);
+	    UNLOCK_DIR(cache);
+	    if (rc)
+		ERROR("db_put: %s", db_strerror(rc));
+	}
     }
 
     // prepare for return
