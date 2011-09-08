@@ -24,6 +24,7 @@ struct cache {
     DB_ENV *env;
     DB *db;
     int dirfd;
+    int pid;
     sigset_t bset, oset;
     unsigned umask, omask;
     unsigned short now;
@@ -112,6 +113,9 @@ struct cache *cache_open(const char *dir)
     // initialize timestamp
     cache->now = time(NULL) / 3600 / 24;
 
+    // remember our process
+    cache->pid = getpid();
+
     // allocate env
     rc = db_env_create(&cache->env, 0);
     if (rc) {
@@ -198,6 +202,10 @@ struct cache *cache_open(const char *dir)
 void cache_close(struct cache *cache)
 {
     if (cache == NULL)
+	return;
+
+    // don't close after fork
+    if (cache->pid != getpid())
 	return;
 
     int rc;
