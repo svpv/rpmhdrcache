@@ -15,7 +15,7 @@
 
 #include <libmemcached/constants.h>
 #include <libmemcached/protocol_handler.h>
-#include <libmemcached/memcached_util.h>
+#include <libmemcached/util/pool.h>
 
 #include "mcdb.h"
 

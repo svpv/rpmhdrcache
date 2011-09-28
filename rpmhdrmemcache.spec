@@ -1,6 +1,6 @@
 Name: rpmhdrmemcache
 Version: 0.1.1
-Release: alt2
+Release: alt3
 
 Summary: Cached reading of rpm package headers
 License: GPLv2+
@@ -34,6 +34,9 @@ install -pD -m644 rpmhdrmemcache.so %buildroot%_libdir/rpmhdrmemcache.so
 %_libdir/rpmhdrmemcache.so
 
 %changelog
+* Wed Sep 28 2011 Vitaly Kuznetsov <vitty@altlinux.ru> 0.1.1-alt3
+- rebuild with libmemcached-0.52
+
 * Mon Jun 27 2011 Vitaly Kuznetsov <vitty@altlinux.ru> 0.1.1-alt2
 - fix description
 
