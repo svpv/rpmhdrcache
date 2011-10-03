@@ -29,12 +29,14 @@ gcc -shared -fPIC -D_GNU_SOURCE %optflags -o libqacache.so.0 -Wl,-soname,libqaca
 	-ldb -lcrypto -lsnappy -Wl,-z,defs
 gcc -shared -fPIC -D_GNU_SOURCE %optflags -o rpmhdrcache.so preload.c hdrcache.c \
 	-Wl,--no-as-needed -lrpmio -lrpm -Wl,--as-needed -lrpmdb -ldl libqacache.so.0 -Wl,-z,defs
+gcc -D_GNU_SOURCE %optflags -o qacache-clean clean.c libqacache.so.0
 
 %install
 install -pD -m644 cache.h %buildroot%_includedir/qa/cache.h
 install -pD -m644 libqacache.so.0 %buildroot%_libdir/libqacache.so.0
 ln -s libqacache.so.0 %buildroot%_libdir/libqacache.so
 install -pD -m644 rpmhdrcache.so %buildroot%_libdir/rpmhdrcache.so
+install -pD -m755 qacache-clean %buildroot%_bindir/qacache-clean
 
 %files
 %_libdir/rpmhdrcache.so
@@ -62,6 +64,7 @@ are stored in a Berkeley DB, larger entries are backed by filesystem.
 
 %files -n libqacache
 %_libdir/libqacache.so.0
+%_bindir/qacache-clean
 
 %files -n libqacache-devel
 %dir %_includedir/qa
