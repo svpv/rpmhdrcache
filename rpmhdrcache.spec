@@ -1,5 +1,5 @@
 Name: rpmhdrcache
-Version: 0.2.3
+Version: 0.3
 Release: alt1
 
 Summary: Cached reading of rpm package headers
@@ -72,6 +72,10 @@ are stored in a Berkeley DB, larger entries are backed by filesystem.
 %_libdir/libqacache.so
 
 %changelog
+* Tue Oct 04 2011 Alexey Tourbin <at@altlinux.ru> 0.3-alt1
+- cache.c: implemented db and fs atime cleanup
+- clean.c: implemented /usr/bin/qacache-clean helper program
+
 * Thu Sep 08 2011 Alexey Tourbin <at@altlinux.ru> 0.2.3-alt1
 - don't close cache db in child processes
 
