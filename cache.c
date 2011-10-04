@@ -17,10 +17,6 @@
 #include <db.h>
 #include "cache.h"
 
-#if DB_VERSION_MAJOR < 4 || (DB_VERSION_MAJOR == 4 && DB_VERSION_MINOR < 4)
-#error "berkeley db 4.4+ required"
-#endif
-
 struct cache {
     DB_ENV *env;
     DB *db;
