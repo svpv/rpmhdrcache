@@ -556,7 +556,79 @@ void cache_put(struct cache *cache,
 
 void cache_clean(struct cache *cache, int days)
 {
-    // TODO: clean
+    if (days < 1) {
+	ERROR("days must be greater than 0, got %d", days);
+	return;
+    }
+
+    int rc;
+
+    // db clean
+    LOCK_DIR(cache, LOCK_EX);
+
+    DBC *dbc;
+    BLOCK_SIGNALS(cache);
+    rc = cache->db->cursor(cache->db, NULL, &dbc, 0);
+    UNBLOCK_SIGNALS(cache);
+
+    if (rc) {
+	UNLOCK_DIR(cache);
+	ERROR("db_cursor: %s", db_strerror(rc));
+	return;
+    }
+
+    while (1) {
+	unsigned char sha1[20] __attribute__((aligned(4)));
+	DBT k = { sha1, 0 };
+	k.ulen = sizeof(sha1);
+	k.flags |= DB_DBT_USERMEM;
+
+	struct cache_ent vbuf, *vent = &vbuf;
+	DBT v = { &vbuf, 0 };
+	v.ulen = sizeof(vbuf);
+	v.dlen = sizeof(vbuf);
+	v.flags |= DB_DBT_USERMEM;
+	v.flags |= DB_DBT_PARTIAL;
+
+	BLOCK_SIGNALS(cache);
+	rc = dbc->get(dbc, &k, &v, DB_NEXT);
+	UNBLOCK_SIGNALS(cache);
+
+	if (rc) {
+	    if (rc != DB_NOTFOUND)
+		ERROR("dbc_get: %s", db_strerror(rc));
+	    break;
+	}
+
+	if (k.size < sizeof(sha1)) {
+	    ERROR("sha1 too small");
+	    continue;
+	}
+
+	if (v.size < sizeof(*vent)) {
+	    ERROR("vent too small");
+	    continue;
+	}
+
+	if (vent->mtime + days >= cache->now) continue;
+	if (vent->atime + days >= cache->now) continue;
+
+	BLOCK_SIGNALS(cache);
+	rc = dbc->del(dbc, 0);
+	UNBLOCK_SIGNALS(cache);
+
+	if (rc)
+	    ERROR("dbc_del: %s", db_strerror(rc));
+    }
+
+    BLOCK_SIGNALS(cache);
+    rc = dbc->close(dbc);
+    UNBLOCK_SIGNALS(cache);
+
+    if (rc)
+	ERROR("dbc_close: %s", db_strerror(rc));
+
+    UNLOCK_DIR(cache);
 }
 
 // ex:ts=8 sts=4 sw=4 noet
