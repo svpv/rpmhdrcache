@@ -12,6 +12,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <sys/file.h>
+#include <dirent.h>
 
 #include <db.h>
 #include "cache.h"
@@ -629,6 +630,61 @@ void cache_clean(struct cache *cache, int days)
 	ERROR("dbc_close: %s", db_strerror(rc));
 
     UNLOCK_DIR(cache);
+
+    // fs clean
+    static const char hex[] = "0123456789abcdef";
+    const char *a1, *a2;
+    for (a1 = hex; *a1; a1++)
+    for (a2 = hex; *a2; a2++) {
+	const char dir[] = { *a1, *a2, '\0' };
+	int dirfd = openat(cache->dirfd, dir, O_RDONLY | O_DIRECTORY);
+	if (dirfd < 0) {
+	    if (errno != ENOENT)
+		ERROR("openat: %m");
+	    continue;
+	}
+
+	DIR *dirp = fdopendir(dirfd);
+	if (dirp == NULL) {
+	    ERROR("fdopendir: %m");
+	    close(dirfd);
+	    continue;
+	}
+
+	struct dirent *dent;
+	while ((dent = readdir(dirp)) != NULL) {
+	    int len = strlen(dent->d_name);
+	    if (len < 38)
+		continue;
+
+	    struct stat st;
+	    rc = fstatat(dirfd, dent->d_name, &st, 0);
+	    if (rc) {
+		ERROR("fstatat: %m");
+		continue;
+	    }
+
+	    short mtime = st.st_mtime / 3600 / 24;
+	    short atime = st.st_atime / 3600 / 24;
+	    if (len == 38) {
+		if (mtime + days >= cache->now) continue;
+		if (atime + days >= cache->now) continue;
+	    }
+	    else {
+		// stale temporary files?
+		if (mtime + 1 >= cache->now) continue;
+		if (atime + 1 >= cache->now) continue;
+	    }
+
+	    rc = unlinkat(dirfd, dent->d_name, 0);
+	    if (rc)
+		ERROR("unlinkat: %m");
+	}
+
+	rc = closedir(dirp);
+	if (rc)
+	    ERROR("closedir: %m");
+    }
 }
 
 // ex:ts=8 sts=4 sw=4 noet
