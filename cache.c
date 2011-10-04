@@ -664,8 +664,8 @@ void cache_clean(struct cache *cache, int days)
 		continue;
 	    }
 
-	    short mtime = st.st_mtime / 3600 / 24;
-	    short atime = st.st_atime / 3600 / 24;
+	    unsigned short mtime = st.st_mtime / 3600 / 24;
+	    unsigned short atime = st.st_atime / 3600 / 24;
 	    if (len == 38) {
 		if (mtime + days >= cache->now) continue;
 		if (atime + days >= cache->now) continue;
