@@ -20,6 +20,17 @@
     if (cache->omask != cache->umask) \
 	umask(cache->omask)
 
+struct cache_ent {
+#define V_SNAPPY (1 << 0)
+    unsigned short flags;
+    unsigned short mtime;
+    unsigned short atime;
+    unsigned short pad;
+};
+
+// Values with compressed size larger than this will be backed by fs.
+#define MAX_DB_VAL_SIZE (32 << 10)
+
 struct cache {
     DB_ENV *env;
     DB *db;
@@ -29,24 +40,16 @@ struct cache {
     unsigned umask, omask;
     unsigned short now;
     unsigned char sha1[20] __attribute__((aligned(4)));
-};
-
-struct cache_ent {
-#define V_SNAPPY (1 << 0)
-    unsigned short flags;
-    unsigned short mtime;
-    unsigned short atime;
-    unsigned short pad;
+    struct cache_ent *vent;
+    int ventsize;
+    char vbuf[sizeof(struct cache_ent) + MAX_DB_VAL_SIZE] __attribute__((aligned(4)));
 };
 
 #pragma GCC visibility push(hidden)
 
-bool fs_get(struct cache *cache,
-	void **valp, int *valsizep);
-void fs_unget(struct cache *cache,
-	void *val, int valsize);
-void fs_put(struct cache *cache,
-	const void *val, int valsize);
+bool fs_get(struct cache *cache);
+void fs_unget(struct cache *cache);
+void fs_put(struct cache *cache);
 void fs_clean(struct cache *cache, int days);
 
 #pragma GCC visibility pop

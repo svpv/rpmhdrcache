@@ -29,8 +29,7 @@ void sha1_filename(const unsigned char *sha1, char *fname, bool tmp)
 #include <dirent.h>
 #include <sys/mman.h>
 
-bool fs_get(struct cache *cache,
-	void **valp, int *valsizep)
+bool fs_get(struct cache *cache)
 {
     char fname[42];
     sha1_filename(cache->sha1, fname, false);
@@ -46,31 +45,25 @@ bool fs_get(struct cache *cache,
 	ERROR("fstat: %m");
 	return false;
     }
-    int valsize = st.st_size;
-    void *val = mmap(NULL, valsize, PROT_READ, MAP_SHARED, fd, 0);
-    if (val == MAP_FAILED) {
+    cache->ventsize = st.st_size;
+    cache->vent = mmap(NULL, cache->ventsize, PROT_READ, MAP_SHARED, fd, 0);
+    if (cache->vent == MAP_FAILED) {
 	ERROR("mmap: %m");
 	close(fd);
 	return false;
     }
     close(fd);
-    if (valp)
-	*valp = val;
-    if (valsizep)
-	*valsizep = valsize;
     return true;
 }
 
-void fs_unget(struct cache *cache,
-	void *val, int valsize)
+void fs_unget(struct cache *cache)
 {
-    int rc = munmap(val, valsize);
+    int rc = munmap(cache->vent, cache->ventsize);
     if (rc < 0)
 	ERROR("munmap: %m");
 }
 
-void fs_put(struct cache *cache,
-	const void *val, int valsize)
+void fs_put(struct cache *cache)
 {
     // open tmp file
     char fname[51];
@@ -90,13 +83,13 @@ void fs_put(struct cache *cache,
     UNSET_UMASK(cache);
 
     // extend and mmap for write
-    rc = ftruncate(fd, valsize);
+    rc = ftruncate(fd, cache->ventsize);
     if (rc < 0) {
 	ERROR("ftruncate: %m");
 	close(fd);
 	return;
     }
-    void *dest = mmap(NULL, valsize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    void *dest = mmap(NULL, cache->ventsize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (dest == MAP_FAILED) {
 	ERROR("mmap: %m");
 	close(fd);
@@ -105,8 +98,8 @@ void fs_put(struct cache *cache,
     close(fd);
 
     // write data
-    memcpy(dest, val, valsize);
-    rc = munmap(dest, valsize);
+    memcpy(dest, cache->vent, cache->ventsize);
+    rc = munmap(dest, cache->ventsize);
     if (rc < 0)
 	ERROR("munmap: %m");
 

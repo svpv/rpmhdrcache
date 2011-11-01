@@ -196,9 +196,6 @@ void cache_close(struct cache *cache)
 // Fast compression and decompression from Google.
 #include <snappy-c.h>
 
-// Values with compressed size larger than this will be backed by fs.
-#define MAX_DB_VAL_SIZE (32 << 10)
-
 bool cache_get(struct cache *cache,
 	const void *key, int keysize,
 	void **valp, int *valsizep)
@@ -211,13 +208,12 @@ bool cache_get(struct cache *cache,
     SHA1(key, keysize, cache->sha1);
     DBT k = { cache->sha1, 20 };
 
-    char vbuf[sizeof(struct cache_ent) + MAX_DB_VAL_SIZE] __attribute__((aligned(4)));
-    DBT v = { vbuf, 0 };
-    v.ulen = sizeof(vbuf);
+    DBT v = { cache->vbuf, 0 };
+    v.ulen = sizeof(cache->vbuf);
     v.flags |= DB_DBT_USERMEM;
 
-    struct cache_ent *vent = (void *) vbuf;
-    int ventsize = 0;
+    cache->vent = cache->vbuf;
+    cache->ventsize = 0;
 
     // read lock
     LOCK_DIR(cache, LOCK_SH);
@@ -231,32 +227,32 @@ bool cache_get(struct cache *cache,
     UNLOCK_DIR(cache);
 
     if (rc == 0)
-	ventsize = v.size;
+	cache->ventsize = v.size;
 
     if (rc && rc != DB_NOTFOUND)
 	ERROR("db_get: %s", db_strerror(rc));
 
     if (rc)
-	if (!fs_get(cache, (void **) &vent, &ventsize))
+	if (!fs_get(cache))
 	    return false;
 
     // validate
-    if (ventsize < sizeof(*vent)) {
+    if (cache->ventsize < sizeof(*cache->vent)) {
 	ERROR("vent too small");
     unget:
-	if (vent != (void *) vbuf)
-	    fs_unget(cache, vent, ventsize);
+	if (cache->vent != (void *) cache->vbuf)
+	    fs_unget(cache);
 	return false;
     }
 
     // update db atime
-    if (vent == (void *) vbuf && vent->atime < cache->now) {
+    if (cache->vent == (void *) cache->vbuf && cache->vent->atime < cache->now) {
 	LOCK_DIR(cache, LOCK_EX);
 	BLOCK_SIGNALS(cache);
 
 	// partial update, user data unchanged
 	v.flags |= DB_DBT_PARTIAL;
-	v.dlen = sizeof(*vent);
+	v.dlen = sizeof(*cache->vent);
 
 	// the record must be still there
 	rc = cache->db->get(cache->db, NULL, &k, &v, DB_GET_BOTH);
@@ -268,8 +264,8 @@ bool cache_get(struct cache *cache,
 	}
 	else {
 	    // actual update
-	    v.size = sizeof(*vent);
-	    vent->atime = cache->now;
+	    v.size = sizeof(*cache->vent);
+	    cache->vent->atime = cache->now;
 	    rc = cache->db->put(cache->db, NULL, &k, &v, 0);
 	    UNBLOCK_SIGNALS(cache);
 	    UNLOCK_DIR(cache);
@@ -279,11 +275,11 @@ bool cache_get(struct cache *cache,
     }
 
     // prepare for return
-    if (vent->flags & V_SNAPPY) {
+    if (cache->vent->flags & V_SNAPPY) {
 	// uncompress
-	int csize = ventsize - sizeof(*vent);
+	int csize = cache->ventsize - sizeof(*cache->vent);
 	size_t usize;
-	if (snappy_uncompressed_length(vent + 1, csize, &usize)) {
+	if (snappy_uncompressed_length(cache->vent + 1, csize, &usize)) {
 	    ERROR("snappy_uncompressed_length: invalid data");
 	    goto unget;
 	}
@@ -292,7 +288,7 @@ bool cache_get(struct cache *cache,
 		ERROR("malloc: %m");
 		goto unget;
 	    }
-	    if (snappy_uncompress(vent + 1, csize, *valp, &usize)) {
+	    if (snappy_uncompress(cache->vent + 1, csize, *valp, &usize)) {
 		ERROR("snappy_uncompress: invalid data");
 		free(*valp);
 		*valp = NULL;
@@ -301,7 +297,7 @@ bool cache_get(struct cache *cache,
 	    ((char *) *valp)[usize] = '\0';
 	}
 	else {
-	    if (snappy_validate_compressed_buffer(vent + 1, csize)) {
+	    if (snappy_validate_compressed_buffer(cache->vent + 1, csize)) {
 		ERROR("snappy_validate_compressed_buffer: invalid data");
 		goto unget;
 	    }
@@ -310,21 +306,21 @@ bool cache_get(struct cache *cache,
 	    *valsizep = usize;
     }
     else {
-	int size = ventsize - sizeof(*vent);
+	int size = cache->ventsize - sizeof(*cache->vent);
 	if (size && valp) {
 	    if ((*valp = malloc(size + 1)) == NULL) {
 		ERROR("malloc: %m");
 		goto unget;
 	    }
-	    memcpy(*valp, vent + 1, size);
+	    memcpy(*valp, cache->vent + 1, size);
 	    ((char *) *valp)[size] = '\0';
 	}
 	if (valsizep)
 	    *valsizep = size;
     }
 
-    if (vent != (void *) vbuf)
-	fs_unget(cache, vent, ventsize);
+    if (cache->vent != (void *) cache->vbuf)
+	fs_unget(cache);
 
     return true;
 }
@@ -338,36 +334,35 @@ void cache_put(struct cache *cache,
     SHA1(key, keysize, cache->sha1);
 
     int max_csize = snappy_max_compressed_length(valsize);
-    struct cache_ent *vent = malloc(sizeof(*vent) + max_csize);
-    if (vent == NULL) {
+    cache->vent = malloc(sizeof(*cache->vent) + max_csize);
+    if (cache->vent == NULL) {
 	ERROR("malloc: %m");
 	return;
     }
-    vent->flags = 0;
-    vent->atime = 0;
-    vent->mtime = 0;
-    vent->pad = 0;
-    int ventsize;
+    cache->vent->flags = 0;
+    cache->vent->atime = 0;
+    cache->vent->mtime = 0;
+    cache->vent->pad = 0;
     size_t csize = max_csize;
-    if (snappy_compress(val, valsize, vent + 1, &csize)) {
+    if (snappy_compress(val, valsize, cache->vent + 1, &csize)) {
 	ERROR("snappy_compress: error");
     uncompressed:
-	memcpy(vent + 1, val, valsize);
-	ventsize = sizeof(*vent) + valsize;
+	memcpy(cache->vent + 1, val, valsize);
+	cache->ventsize = sizeof(*cache->vent) + valsize;
     }
     else if (csize >= valsize)
 	goto uncompressed;
     else {
-	vent->flags |= V_SNAPPY;
-	ventsize = sizeof(*vent) + csize;
+	cache->vent->flags |= V_SNAPPY;
+	cache->ventsize = sizeof(*cache->vent) + csize;
     }
 
-    if (ventsize - sizeof(*vent) <= MAX_DB_VAL_SIZE) {
+    if (cache->ventsize - sizeof(*cache->vent) <= MAX_DB_VAL_SIZE) {
 	// db put
 	DBT k = { cache->sha1, 20 };
-	DBT v = { vent, ventsize };
-	vent->mtime = cache->now;
-	vent->atime = cache->now;
+	DBT v = { cache->vent, cache->ventsize };
+	cache->vent->mtime = cache->now;
+	cache->vent->atime = cache->now;
 
 	LOCK_DIR(cache, LOCK_EX);
 	BLOCK_SIGNALS(cache);
@@ -380,7 +375,7 @@ void cache_put(struct cache *cache,
 	if (rc)
 	    ERROR("db_put: %s", db_strerror(rc));
 
-	free(vent);
+	free(cache->vent);
 	return;
     }
     else {
@@ -399,7 +394,7 @@ void cache_put(struct cache *cache,
 	    ERROR("db_del: %s", db_strerror(rc));
     }
 
-    fs_put(cache, vent, ventsize);
+    fs_put(cache);
 }
 
 void cache_clean(struct cache *cache, int days)
@@ -430,10 +425,10 @@ void cache_clean(struct cache *cache, int days)
 	k.ulen = sizeof(cache->sha1);
 	k.flags |= DB_DBT_USERMEM;
 
-	struct cache_ent vbuf, *vent = &vbuf;
-	DBT v = { &vbuf, 0 };
-	v.ulen = sizeof(vbuf);
-	v.dlen = sizeof(vbuf);
+	cache->vent = cache->vbuf;
+	DBT v = { cache->vbuf, 0 };
+	v.ulen = sizeof(cache->vbuf);
+	v.dlen = sizeof(cache->vbuf);
 	v.flags |= DB_DBT_USERMEM;
 	v.flags |= DB_DBT_PARTIAL;
 
@@ -452,13 +447,13 @@ void cache_clean(struct cache *cache, int days)
 	    continue;
 	}
 
-	if (v.size < sizeof(*vent)) {
+	if (v.size < sizeof(*cache->vent)) {
 	    ERROR("vent too small");
 	    continue;
 	}
 
-	if (vent->mtime + days >= cache->now) continue;
-	if (vent->atime + days >= cache->now) continue;
+	if (cache->vent->mtime + days >= cache->now) continue;
+	if (cache->vent->atime + days >= cache->now) continue;
 
 	BLOCK_SIGNALS(cache);
 	rc = dbc->del(dbc, 0);
