@@ -32,13 +32,16 @@ struct cache_ent {
 #define MAX_DB_VAL_SIZE (32 << 10)
 
 struct cache {
-    DB_ENV *env;
-    DB *db;
+    // common
     int dirfd;
-    int pid;
-    sigset_t bset, oset;
     unsigned umask, omask;
     unsigned short now;
+    // db
+    DB_ENV *env;
+    DB *db;
+    sigset_t bset, oset;
+    int pid;
+    // data
     unsigned char sha1[20] __attribute__((aligned(4)));
     struct cache_ent *vent;
     int ventsize;
@@ -51,5 +54,12 @@ bool fs_get(struct cache *cache);
 void fs_unget(struct cache *cache);
 void fs_put(struct cache *cache);
 void fs_clean(struct cache *cache, int days);
+
+bool db_open(struct cache *cache, const char *dir);
+bool db_get(struct cache *cache);
+void db_atime(struct cache *cache);
+void db_put(struct cache *cache);
+void db_close(struct cache *cache);
+void db_clean(struct cache *cache, int days);
 
 #pragma GCC visibility pop
