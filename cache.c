@@ -1,35 +1,5 @@
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <signal.h>
-#include <errno.h>
-#include <sys/file.h>
-#include <dirent.h>
-
-#include <db.h>
 #include "cache.h"
-
-struct cache {
-    DB_ENV *env;
-    DB *db;
-    int dirfd;
-    int pid;
-    sigset_t bset, oset;
-    unsigned umask, omask;
-    unsigned short now;
-};
-
-#define ERROR(fmt, args...) \
-    fprintf(stderr, "%s: %s: " fmt "\n", \
-	    program_invocation_short_name, __func__, ##args)
+#include "cache-impl.h"
 
 #define BLOCK_SIGNALS(cache) \
     if (sigprocmask(SIG_BLOCK, &cache->bset, &cache->oset)) \
@@ -37,6 +7,8 @@ struct cache {
 #define UNBLOCK_SIGNALS(cache) \
     if (sigprocmask(SIG_SETMASK, &cache->oset, NULL)) \
 	ERROR("SIG_SETMASK: %m")
+
+#include <sys/file.h>
 
 #define LOCK_DIR(cache, op) \
     {	int rc_; \
@@ -49,12 +21,6 @@ struct cache {
 #define UNLOCK_DIR(cache) \
     if (flock(cache->dirfd, LOCK_UN)) \
 	ERROR("LOCK_UN: %m")
-
-#define SET_UMASK(cache) \
-    cache->omask = umask(cache->umask)
-#define UNSET_UMASK(cache) \
-    if (cache->omask != cache->umask) \
-	umask(cache->omask)
 
 static
 void errcall(const DB_ENV *env, const char *prefix, const char *msg)
@@ -227,48 +193,11 @@ void cache_close(struct cache *cache)
     free(cache);
 }
 
-// Convert 20-byte sha1 to "XX/YYY..." filename.
-static
-void sha1_filename(const unsigned char *sha1, char *fname, bool tmp)
-{
-    static const char hex[] = "0123456789abcdef";
-    inline
-    void sha1_byte()
-    {
-	*fname++ = hex[*sha1 & 0x0f];
-	*fname++ = hex[*sha1++ >> 4];
-    }
-    sha1_byte();
-    *fname++ = '/';
-    int i;
-    for (i = 1; i < 20; i++)
-	sha1_byte();
-    if (tmp) {
-	*fname++ = '.';
-	int rnd = rand();
-	sha1 = (const unsigned char *) &rnd;
-	for (i = 0; i < 4; i++)
-	    sha1_byte();
-    }
-    *fname = '\0';
-}
-
 // Fast compression and decompression from Google.
 #include <snappy-c.h>
 
 // Values with compressed size larger than this will be backed by fs.
 #define MAX_DB_VAL_SIZE (32 << 10)
-
-struct cache_ent {
-#define V_SNAPPY (1 << 0)
-    unsigned short flags;
-    unsigned short mtime;
-    unsigned short atime;
-    unsigned short pad;
-};
-
-// Will use mmap for fs get and fs put.
-#include <sys/mman.h>
 
 bool cache_get(struct cache *cache,
 	const void *key, int keysize,
@@ -308,41 +237,16 @@ bool cache_get(struct cache *cache,
     if (rc && rc != DB_NOTFOUND)
 	ERROR("db_get: %s", db_strerror(rc));
 
-    if (rc) {
-	// fs get
-	char fname[42];
-	sha1_filename(sha1, fname, false);
-	int fd = openat(cache->dirfd, fname, O_RDONLY);
-	if (fd < 0) {
-	    if (errno != ENOENT)
-		ERROR("openat: %m");
+    if (rc)
+	if (!fs_get(cache, sha1, (void **) &vent, &ventsize))
 	    return false;
-	}
-	struct stat st;
-	rc = fstat(fd, &st);
-	if (rc < 0) {
-	    ERROR("fstat: %m");
-	    return false;
-	}
-	ventsize = st.st_size;
-	vent = mmap(NULL, ventsize, PROT_READ, MAP_SHARED, fd, 0);
-	if (vent == MAP_FAILED) {
-	    ERROR("mmap: %m");
-	    close(fd);
-	    return false;
-	}
-	close(fd);
-    }
 
     // validate
     if (ventsize < sizeof(*vent)) {
 	ERROR("vent too small");
-    munmap:
-	if (vent != (void *) vbuf) {
-	    rc = munmap(vent, ventsize);
-	    if (rc < 0)
-		ERROR("munmap: %m");
-	}
+    unget:
+	if (vent != (void *) vbuf)
+	    fs_unget(cache, sha1, vent, ventsize);
 	return false;
     }
 
@@ -382,25 +286,25 @@ bool cache_get(struct cache *cache,
 	size_t usize;
 	if (snappy_uncompressed_length(vent + 1, csize, &usize)) {
 	    ERROR("snappy_uncompressed_length: invalid data");
-	    goto munmap;
+	    goto unget;
 	}
 	if (valp) {
 	    if ((*valp = malloc(usize + 1)) == NULL) {
 		ERROR("malloc: %m");
-		goto munmap;
+		goto unget;
 	    }
 	    if (snappy_uncompress(vent + 1, csize, *valp, &usize)) {
 		ERROR("snappy_uncompress: invalid data");
 		free(*valp);
 		*valp = NULL;
-		goto munmap;
+		goto unget;
 	    }
 	    ((char *) *valp)[usize] = '\0';
 	}
 	else {
 	    if (snappy_validate_compressed_buffer(vent + 1, csize)) {
 		ERROR("snappy_validate_compressed_buffer: invalid data");
-		goto munmap;
+		goto unget;
 	    }
 	}
 	if (valsizep)
@@ -411,7 +315,7 @@ bool cache_get(struct cache *cache,
 	if (size && valp) {
 	    if ((*valp = malloc(size + 1)) == NULL) {
 		ERROR("malloc: %m");
-		goto munmap;
+		goto unget;
 	    }
 	    memcpy(*valp, vent + 1, size);
 	    ((char *) *valp)[size] = '\0';
@@ -420,11 +324,8 @@ bool cache_get(struct cache *cache,
 	    *valsizep = size;
     }
 
-    if (vent != (void *) vbuf) {
-	rc = munmap(vent, ventsize);
-	if (rc < 0)
-	    ERROR("munmap: %m");
-    }
+    if (vent != (void *) vbuf)
+	fs_unget(cache, sha1, vent, ventsize);
 
     return true;
 }
@@ -500,55 +401,7 @@ void cache_put(struct cache *cache,
 	    ERROR("db_del: %s", db_strerror(rc));
     }
 
-    // fs put: open tmp file
-    char fname[51];
-    sha1_filename(sha1, fname, true);
-    fname[2] = '\0';
-    SET_UMASK(cache);
-    rc = mkdirat(cache->dirfd, fname, 0777);
-    if (rc < 0 && errno != EEXIST)
-	ERROR("mkdirat: %m");
-    fname[2] = '/';
-    int fd = openat(cache->dirfd, fname, O_RDWR | O_CREAT | O_EXCL, 0666);
-    if (fd < 0) {
-	ERROR("openat: %m");
-	UNSET_UMASK(cache);
-	free(vent);
-	return;
-    }
-    UNSET_UMASK(cache);
-
-    // extend and mmap for write
-    rc = ftruncate(fd, ventsize);
-    if (rc < 0) {
-	ERROR("ftruncate: %m");
-	close(fd);
-	free(vent);
-	return;
-    }
-    void *dest = mmap(NULL, ventsize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (dest == MAP_FAILED) {
-	ERROR("mmap: %m");
-	close(fd);
-	free(vent);
-	return;
-    }
-    close(fd);
-
-    // write data
-    memcpy(dest, vent, ventsize);
-    rc = munmap(dest, ventsize);
-    if (rc < 0)
-	ERROR("munmap: %m");
-    free(vent);
-
-    // move to permanent location
-    char outfname[42];
-    memcpy(outfname, fname, 41);
-    outfname[41] = '\0';
-    rc = renameat(cache->dirfd, fname, cache->dirfd, outfname);
-    if (rc < 0)
-	ERROR("renameat: %m");
+    fs_put(cache, sha1, vent, ventsize);
 }
 
 void cache_clean(struct cache *cache, int days)
@@ -627,60 +480,7 @@ void cache_clean(struct cache *cache, int days)
 
     UNLOCK_DIR(cache);
 
-    // fs clean
-    static const char hex[] = "0123456789abcdef";
-    const char *a1, *a2;
-    for (a1 = hex; *a1; a1++)
-    for (a2 = hex; *a2; a2++) {
-	const char dir[] = { *a1, *a2, '\0' };
-	int dirfd = openat(cache->dirfd, dir, O_RDONLY | O_DIRECTORY);
-	if (dirfd < 0) {
-	    if (errno != ENOENT)
-		ERROR("openat: %m");
-	    continue;
-	}
-
-	DIR *dirp = fdopendir(dirfd);
-	if (dirp == NULL) {
-	    ERROR("fdopendir: %m");
-	    close(dirfd);
-	    continue;
-	}
-
-	struct dirent *dent;
-	while ((dent = readdir(dirp)) != NULL) {
-	    int len = strlen(dent->d_name);
-	    if (len < 38)
-		continue;
-
-	    struct stat st;
-	    rc = fstatat(dirfd, dent->d_name, &st, 0);
-	    if (rc) {
-		ERROR("fstatat: %m");
-		continue;
-	    }
-
-	    unsigned short mtime = st.st_mtime / 3600 / 24;
-	    unsigned short atime = st.st_atime / 3600 / 24;
-	    if (len == 38) {
-		if (mtime + days >= cache->now) continue;
-		if (atime + days >= cache->now) continue;
-	    }
-	    else {
-		// stale temporary files?
-		if (mtime + 1 >= cache->now) continue;
-		if (atime + 1 >= cache->now) continue;
-	    }
-
-	    rc = unlinkat(dirfd, dent->d_name, 0);
-	    if (rc)
-		ERROR("unlinkat: %m");
-	}
-
-	rc = closedir(dirp);
-	if (rc)
-	    ERROR("closedir: %m");
-    }
+    fs_clean(cache, days);
 }
 
 // ex:ts=8 sts=4 sw=4 noet
