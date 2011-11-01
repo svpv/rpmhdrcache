@@ -30,11 +30,10 @@ void sha1_filename(const unsigned char *sha1, char *fname, bool tmp)
 #include <sys/mman.h>
 
 bool fs_get(struct cache *cache,
-	const unsigned char *sha1,
 	void **valp, int *valsizep)
 {
     char fname[42];
-    sha1_filename(sha1, fname, false);
+    sha1_filename(cache->sha1, fname, false);
     int fd = openat(cache->dirfd, fname, O_RDONLY);
     if (fd < 0) {
 	if (errno != ENOENT)
@@ -63,7 +62,6 @@ bool fs_get(struct cache *cache,
 }
 
 void fs_unget(struct cache *cache,
-	const unsigned char *sha1,
 	void *val, int valsize)
 {
     int rc = munmap(val, valsize);
@@ -72,12 +70,11 @@ void fs_unget(struct cache *cache,
 }
 
 void fs_put(struct cache *cache,
-	const unsigned char *sha1,
 	const void *val, int valsize)
 {
     // open tmp file
     char fname[51];
-    sha1_filename(sha1, fname, true);
+    sha1_filename(cache->sha1, fname, true);
     fname[2] = '\0';
     SET_UMASK(cache);
     int rc = mkdirat(cache->dirfd, fname, 0777);

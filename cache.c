@@ -208,9 +208,8 @@ bool cache_get(struct cache *cache,
     if (valsizep)
 	*valsizep = 0;
 
-    unsigned char sha1[20] __attribute__((aligned(4)));
-    SHA1(key, keysize, sha1);
-    DBT k = { sha1, 20 };
+    SHA1(key, keysize, cache->sha1);
+    DBT k = { cache->sha1, 20 };
 
     char vbuf[sizeof(struct cache_ent) + MAX_DB_VAL_SIZE] __attribute__((aligned(4)));
     DBT v = { vbuf, 0 };
@@ -238,7 +237,7 @@ bool cache_get(struct cache *cache,
 	ERROR("db_get: %s", db_strerror(rc));
 
     if (rc)
-	if (!fs_get(cache, sha1, (void **) &vent, &ventsize))
+	if (!fs_get(cache, (void **) &vent, &ventsize))
 	    return false;
 
     // validate
@@ -246,7 +245,7 @@ bool cache_get(struct cache *cache,
 	ERROR("vent too small");
     unget:
 	if (vent != (void *) vbuf)
-	    fs_unget(cache, sha1, vent, ventsize);
+	    fs_unget(cache, vent, ventsize);
 	return false;
     }
 
@@ -325,7 +324,7 @@ bool cache_get(struct cache *cache,
     }
 
     if (vent != (void *) vbuf)
-	fs_unget(cache, sha1, vent, ventsize);
+	fs_unget(cache, vent, ventsize);
 
     return true;
 }
@@ -336,8 +335,7 @@ void cache_put(struct cache *cache,
 {
     int rc;
 
-    unsigned char sha1[20] __attribute__((aligned(4)));
-    SHA1(key, keysize, sha1);
+    SHA1(key, keysize, cache->sha1);
 
     int max_csize = snappy_max_compressed_length(valsize);
     struct cache_ent *vent = malloc(sizeof(*vent) + max_csize);
@@ -366,7 +364,7 @@ void cache_put(struct cache *cache,
 
     if (ventsize - sizeof(*vent) <= MAX_DB_VAL_SIZE) {
 	// db put
-	DBT k = { sha1, 20 };
+	DBT k = { cache->sha1, 20 };
 	DBT v = { vent, ventsize };
 	vent->mtime = cache->now;
 	vent->atime = cache->now;
@@ -387,7 +385,7 @@ void cache_put(struct cache *cache,
     }
     else {
 	// db del
-	DBT k = { sha1, 20 };
+	DBT k = { cache->sha1, 20 };
 
 	LOCK_DIR(cache, LOCK_EX);
 	BLOCK_SIGNALS(cache);
@@ -401,7 +399,7 @@ void cache_put(struct cache *cache,
 	    ERROR("db_del: %s", db_strerror(rc));
     }
 
-    fs_put(cache, sha1, vent, ventsize);
+    fs_put(cache, vent, ventsize);
 }
 
 void cache_clean(struct cache *cache, int days)
@@ -428,9 +426,8 @@ void cache_clean(struct cache *cache, int days)
     }
 
     while (1) {
-	unsigned char sha1[20] __attribute__((aligned(4)));
-	DBT k = { sha1, 0 };
-	k.ulen = sizeof(sha1);
+	DBT k = { cache->sha1, 0 };
+	k.ulen = sizeof(cache->sha1);
 	k.flags |= DB_DBT_USERMEM;
 
 	struct cache_ent vbuf, *vent = &vbuf;
@@ -450,7 +447,7 @@ void cache_clean(struct cache *cache, int days)
 	    break;
 	}
 
-	if (k.size < sizeof(sha1)) {
+	if (k.size < sizeof(cache->sha1)) {
 	    ERROR("sha1 too small");
 	    continue;
 	}

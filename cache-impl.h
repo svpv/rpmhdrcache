@@ -28,6 +28,7 @@ struct cache {
     sigset_t bset, oset;
     unsigned umask, omask;
     unsigned short now;
+    unsigned char sha1[20] __attribute__((aligned(4)));
 };
 
 struct cache_ent {
@@ -41,13 +42,10 @@ struct cache_ent {
 #pragma GCC visibility push(hidden)
 
 bool fs_get(struct cache *cache,
-	const unsigned char *sha1,
 	void **valp, int *valsizep);
 void fs_unget(struct cache *cache,
-	const unsigned char *sha1,
 	void *val, int valsize);
 void fs_put(struct cache *cache,
-	const unsigned char *sha1,
 	const void *val, int valsize);
 void fs_clean(struct cache *cache, int days);
 
