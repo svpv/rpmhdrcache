@@ -13,9 +13,7 @@
 #include <errno.h>
 #include <sys/file.h>
 
-#include <libmemcached/constants.h>
-#include <libmemcached/protocol_handler.h>
-#include <libmemcached/util/pool.h>
+#include <libmemcachedutil-1.0/pool.h>
 
 #include "mcdb.h"
 
