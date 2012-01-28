@@ -1,6 +1,6 @@
 Name: rpmhdrmemcache
-Version: 0.1.1
-Release: alt4
+Version: 0.1.2
+Release: alt2
 
 Summary: Cached reading of rpm package headers
 License: GPLv2+
@@ -20,7 +20,7 @@ perloadable module.  This module intercepts rpmReadPackageHeader calls and
 caches the result using memcached.
 
 %prep
-%setup -q
+%setup
 
 %build
 gcc -shared -fPIC -D_GNU_SOURCE %optflags -combine -fwhole-program \
@@ -34,8 +34,12 @@ install -pD -m644 rpmhdrmemcache.so %buildroot%_libdir/rpmhdrmemcache.so
 %_libdir/rpmhdrmemcache.so
 
 %changelog
-* Sat Jan 28 2012 Vitaly Kuznetsov <vitty@altlinux.ru> 0.1.1-alt4
+* Sat Jan 28 2012 Vitaly Kuznetsov <vitty@altlinux.ru> 0.1.2-alt2
 - rebuild with libmemcached-1.0.4
+
+* Tue Nov 01 2011 Dmitry V. Levin <ldv@altlinux.org> 0.1.2-alt1
+- Fixed potential memory corruption and memory leak
+  (by Alexey Tourbin; closes: #26463).
 
 * Wed Sep 28 2011 Vitaly Kuznetsov <vitty@altlinux.ru> 0.1.1-alt3
 - rebuild with libmemcached-0.52

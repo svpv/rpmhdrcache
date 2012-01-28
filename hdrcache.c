@@ -128,13 +128,14 @@ Header hdrcache_get(const char *path, const struct stat *st, unsigned *off)
 	}
 	blob = ublob;
     }
-    Header h = headerLoad(blob);
+    Header h = headerCopyLoad(blob);
     if (h == NULL) {
 	fprintf(stderr, "%s %s: headerLoad failed\n", __func__, key);
 	return NULL;
     }
     if (off)
 	*off = data->off;
+    free(data);
     return h;
 }
 
