@@ -1,6 +1,6 @@
 Name: rpmhdrmemcache
 Version: 0.1.2
-Release: alt2
+Release: alt3
 
 Summary: Cached reading of rpm package headers
 License: GPLv2+
@@ -23,7 +23,7 @@ caches the result using memcached.
 %setup
 
 %build
-gcc -shared -fPIC -D_GNU_SOURCE %optflags -combine -fwhole-program \
+gcc -shared -fPIC -D_GNU_SOURCE %optflags -flto -fwhole-program \
 	-o rpmhdrmemcache.so preload.c hdrcache.c mcdb.c \
 	-Wl,--no-as-needed -lrpmio -lrpm -Wl,--as-needed -lrpmdb -ldl -lmemcached -lmemcachedutil -llzo2 -Wl,-z,defs 
 
@@ -34,6 +34,10 @@ install -pD -m644 rpmhdrmemcache.so %buildroot%_libdir/rpmhdrmemcache.so
 %_libdir/rpmhdrmemcache.so
 
 %changelog
+* Mon Jun 18 2012 Vitaly Kuznetsov <vitty@altlinux.ru> 0.1.2-alt3
+- rebuild with libmemcached-1.0.8
+- fix build
+
 * Sat Jan 28 2012 Vitaly Kuznetsov <vitty@altlinux.ru> 0.1.2-alt2
 - rebuild with libmemcached-1.0.4
 
