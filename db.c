@@ -224,7 +224,7 @@ void db_put(struct cache *cache)
     LOCK_DIR(cache, LOCK_EX);
     BLOCK_SIGNALS(cache);
 
-    rc = cache->db->put(cache->db, NULL, &k, &v, 0);
+    int rc = cache->db->put(cache->db, NULL, &k, &v, 0);
 
     UNBLOCK_SIGNALS(cache);
     UNLOCK_DIR(cache);
@@ -240,7 +240,7 @@ void db_del(struct cache *cache)
     LOCK_DIR(cache, LOCK_EX);
     BLOCK_SIGNALS(cache);
 
-    rc = cache->db->del(cache->db, NULL, &k, 0);
+    int rc = cache->db->del(cache->db, NULL, &k, 0);
 
     UNBLOCK_SIGNALS(cache);
     UNLOCK_DIR(cache);

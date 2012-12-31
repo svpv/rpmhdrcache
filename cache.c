@@ -138,8 +138,6 @@ void cache_put(struct cache *cache,
 	const void *key, int keysize,
 	const void *val, int valsize)
 {
-    int rc;
-
     SHA1(key, keysize, cache->sha1);
 
     int max_csize = snappy_max_compressed_length(valsize);
