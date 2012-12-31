@@ -4,7 +4,7 @@
 struct cache *cache_open(const char *dir)
 {
     // allocate cache
-    struct cache *cache = malloc(sizeof(*cache) + strlen(dir));
+    struct cache *cache = malloc(sizeof(*cache));
     if (cache == NULL) {
 	ERROR("malloc: %m");
 	return NULL;
