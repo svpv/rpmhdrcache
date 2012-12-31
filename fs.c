@@ -2,27 +2,26 @@
 
 // Convert 20-byte sha1 to "XX/YYY..." filename.
 static
-void sha1_filename(const unsigned char *sha1, char *fname, bool tmp)
+void sha1_filename(const unsigned char *sha1, char *fname, int pid)
 {
     static const char hex[] = "0123456789abcdef";
-    inline
-    void sha1_byte()
-    {
-	*fname++ = hex[*sha1 & 0x0f];
-	*fname++ = hex[*sha1++ >> 4];
+#define SHA1_BYTE { \
+	*fname++ = hex[*sha1 & 0x0f]; \
+	*fname++ = hex[*sha1++ >> 4]; \
     }
-    sha1_byte();
+    SHA1_BYTE;
     *fname++ = '/';
-    int i;
-    for (i = 1; i < 20; i++)
-	sha1_byte();
-    if (tmp) {
+    for (int i = 1; i < 20; i++)
+	SHA1_BYTE;
+    if (pid) {
 	*fname++ = '.';
-	int rnd = rand();
-	sha1 = (const unsigned char *) &rnd;
-	for (i = 0; i < 4; i++)
-	    sha1_byte();
+	unsigned tmp = rand();
+	tmp = (tmp << 1) ^ pid;
+	sha1 = (const unsigned char *) &tmp;
+	for (int i = 0; i < 4; i++)
+	    SHA1_BYTE;
     }
+#undef SHA1_BYTE
     *fname = '\0';
 }
 
@@ -32,7 +31,7 @@ void sha1_filename(const unsigned char *sha1, char *fname, bool tmp)
 bool fs_get(struct cache *cache)
 {
     char fname[42];
-    sha1_filename(cache->sha1, fname, false);
+    sha1_filename(cache->sha1, fname, 0);
     int fd = openat(cache->dirfd, fname, O_RDONLY);
     if (fd < 0) {
 	if (errno != ENOENT)
@@ -67,7 +66,7 @@ void fs_put(struct cache *cache)
 {
     // open tmp file
     char fname[51];
-    sha1_filename(cache->sha1, fname, true);
+    sha1_filename(cache->sha1, fname, cache->pid);
     fname[2] = '\0';
     SET_UMASK(cache);
     int rc = mkdirat(cache->dirfd, fname, 0777);

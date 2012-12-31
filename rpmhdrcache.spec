@@ -25,11 +25,11 @@ caches the result using libqacache library.
 %setup -q
 
 %build
-gcc -shared -fPIC -D_GNU_SOURCE %optflags -o libqacache.so.0 -Wl,-soname,libqacache.so.0 cache.c db.c fs.c \
+gcc -std=gnu99 -shared -fPIC -D_GNU_SOURCE %optflags -o libqacache.so.0 -Wl,-soname,libqacache.so.0 cache.c db.c fs.c \
 	-ldb -lcrypto -lsnappy -Wl,-z,defs
-gcc -shared -fPIC -D_GNU_SOURCE %optflags -o rpmhdrcache.so preload.c hdrcache.c \
+gcc -std=gnu99 -shared -fPIC -D_GNU_SOURCE %optflags -o rpmhdrcache.so preload.c hdrcache.c \
 	-Wl,--no-as-needed -lrpmio -lrpm -Wl,--as-needed -lrpmdb -ldl libqacache.so.0 -Wl,-z,defs
-gcc -D_GNU_SOURCE %optflags -o qacache-clean clean.c libqacache.so.0
+gcc -std=gnu99 -D_GNU_SOURCE %optflags -o qacache-clean clean.c libqacache.so.0
 
 %install
 install -pD -m644 cache.h %buildroot%_includedir/qa/cache.h
