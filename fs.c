@@ -28,10 +28,12 @@ void sha1_filename(const unsigned char *sha1, char *fname, int pid)
 #include <dirent.h>
 #include <sys/mman.h>
 
-bool fs_get(struct cache *cache)
+bool qafs_get(struct cache *cache,
+	const unsigned char *sha1,
+	void **valp, int *valsizep)
 {
     char fname[42];
-    sha1_filename(cache->sha1, fname, 0);
+    sha1_filename(sha1, fname, 0);
     int fd = openat(cache->dirfd, fname, O_RDONLY);
     if (fd < 0) {
 	if (errno != ENOENT)
@@ -44,29 +46,35 @@ bool fs_get(struct cache *cache)
 	ERROR("fstat: %m");
 	return false;
     }
-    cache->ventsize = st.st_size;
-    cache->vent = mmap(NULL, cache->ventsize, PROT_READ, MAP_SHARED, fd, 0);
-    if (cache->vent == MAP_FAILED) {
+    int valsize = st.st_size;
+    void *val = mmap(NULL, valsize, PROT_READ, MAP_SHARED, fd, 0);
+    if (val == MAP_FAILED) {
 	ERROR("mmap: %m");
 	close(fd);
 	return false;
     }
     close(fd);
+    if (valp)
+	*valp = val;
+    if (valsizep)
+	*valsizep = valsize;
     return true;
 }
 
-void fs_unget(struct cache *cache)
+void qafs_unget(void *val, int valsize)
 {
-    int rc = munmap(cache->vent, cache->ventsize);
+    int rc = munmap(val, valsize);
     if (rc < 0)
 	ERROR("munmap: %m");
 }
 
-void fs_put(struct cache *cache)
+void qafs_put(struct cache *cache,
+	const unsigned char *sha1,
+	const void *val, int valsize)
 {
     // open tmp file
     char fname[51];
-    sha1_filename(cache->sha1, fname, cache->pid);
+    sha1_filename(sha1, fname, cache->pid);
     fname[2] = '\0';
     SET_UMASK(cache);
     int rc = mkdirat(cache->dirfd, fname, 0777);
@@ -82,13 +90,13 @@ void fs_put(struct cache *cache)
     UNSET_UMASK(cache);
 
     // extend and mmap for write
-    rc = ftruncate(fd, cache->ventsize);
+    rc = ftruncate(fd, valsize);
     if (rc < 0) {
 	ERROR("ftruncate: %m");
 	close(fd);
 	return;
     }
-    void *dest = mmap(NULL, cache->ventsize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    void *dest = mmap(NULL, valsize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (dest == MAP_FAILED) {
 	ERROR("mmap: %m");
 	close(fd);
@@ -97,8 +105,8 @@ void fs_put(struct cache *cache)
     close(fd);
 
     // write data
-    memcpy(dest, cache->vent, cache->ventsize);
-    rc = munmap(dest, cache->ventsize);
+    memcpy(dest, val, valsize);
+    rc = munmap(dest, valsize);
     if (rc < 0)
 	ERROR("munmap: %m");
 
@@ -111,7 +119,7 @@ void fs_put(struct cache *cache)
 	ERROR("renameat: %m");
 }
 
-void fs_clean(struct cache *cache, int days)
+void qafs_clean(struct cache *cache, int days)
 {
     static const char hex[] = "0123456789abcdef";
     const char *a1, *a2;

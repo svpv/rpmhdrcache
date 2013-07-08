@@ -41,25 +41,30 @@ struct cache {
     DB *db;
     sigset_t bset, oset;
     int pid;
-    // data
-    unsigned char sha1[20] __attribute__((aligned(4)));
-    struct cache_ent *vent;
-    int ventsize;
-    char vbuf[sizeof(struct cache_ent) + MAX_DB_VAL_SIZE] __attribute__((aligned(4)));
 };
 
 #pragma GCC visibility push(hidden)
 
-bool fs_get(struct cache *cache);
-void fs_unget(struct cache *cache);
-void fs_put(struct cache *cache);
-void fs_clean(struct cache *cache, int days);
+bool qafs_get(struct cache *cache,
+	const unsigned char *sha1,
+	void **valp, int *valsizep);
+void qafs_unget(void *val, int valsize);
+void qafs_put(struct cache *cache,
+	const unsigned char *sha1,
+	const void *val, int valsize);
+void qafs_clean(struct cache *cache, int days);
 
-bool db_open(struct cache *cache, const char *dir);
-bool db_get(struct cache *cache);
-void db_atime(struct cache *cache);
-void db_put(struct cache *cache);
-void db_close(struct cache *cache);
-void db_clean(struct cache *cache, int days);
+bool qadb_open(struct cache *cache, const char *dir);
+bool qadb_get(struct cache *cache,
+	const unsigned char *sha1,
+	void *vbuf, int *valsize);
+void qadb_atime(struct cache *cache,
+	const unsigned char *sha1,
+	struct cache_ent *vent, int ventsize);
+void qadb_put(struct cache *cache,
+	const unsigned char *sha1,
+	struct cache_ent *vent, int ventsize);
+void qadb_close(struct cache *cache);
+void qadb_clean(struct cache *cache, int days);
 
 #pragma GCC visibility pop

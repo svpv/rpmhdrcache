@@ -32,7 +32,7 @@ struct cache *cache_open(const char *dir)
     cache->now = time(NULL) / 3600 / 24;
 
     // initialize db backend
-    if (!db_open(cache, dir)) {
+    if (!qadb_open(cache, dir)) {
 	close(cache->dirfd);
 	free(cache);
 	return NULL;
@@ -45,7 +45,7 @@ void cache_close(struct cache *cache)
 {
     if (cache == NULL)
 	return;
-    db_close(cache);
+    qadb_close(cache);
     close(cache->dirfd);
     free(cache);
 }
@@ -64,31 +64,36 @@ bool cache_get(struct cache *cache,
     if (valsizep)
 	*valsizep = 0;
 
-    SHA1(key, keysize, cache->sha1);
+    unsigned char sha1[20] __attribute__((aligned(4)));
+    SHA1(key, keysize, sha1);
 
-    if (!db_get(cache))
-	if (!fs_get(cache))
+    char vbuf[sizeof(struct cache_ent) + MAX_DB_VAL_SIZE] __attribute__((aligned(4)));
+    struct cache_ent *vent = (void *) vbuf;
+    int ventsize = sizeof(vbuf);
+
+    if (!qadb_get(cache, sha1, vent, &ventsize))
+	if (!qafs_get(cache, sha1, (void **) &vent, &ventsize))
 	    return false;
 
     // validate
-    if (cache->ventsize < sizeof(*cache->vent)) {
+    if (ventsize < sizeof(*vent)) {
 	ERROR("vent too small");
     unget:
-	if (cache->vent != (void *) cache->vbuf)
-	    fs_unget(cache);
+	if (vent != (void *) vbuf)
+	    qafs_unget(vent, ventsize);
 	return false;
     }
 
     // update db atime
-    if (cache->vent == (void *) cache->vbuf && cache->vent->atime < cache->now)
-	db_atime(cache);
+    if (vent == (void *) vbuf && vent->atime < cache->now)
+	qadb_atime(cache, sha1, vent, ventsize);
 
     // prepare for return
-    if (cache->vent->flags & V_SNAPPY) {
+    if (vent->flags & V_SNAPPY) {
 	// uncompress
-	int csize = cache->ventsize - sizeof(*cache->vent);
+	int csize = ventsize - sizeof(*vent);
 	size_t usize;
-	if (snappy_uncompressed_length(cache->vent + 1, csize, &usize)) {
+	if (snappy_uncompressed_length(vent + 1, csize, &usize)) {
 	    ERROR("snappy_uncompressed_length: invalid data");
 	    goto unget;
 	}
@@ -97,7 +102,7 @@ bool cache_get(struct cache *cache,
 		ERROR("malloc: %m");
 		goto unget;
 	    }
-	    if (snappy_uncompress(cache->vent + 1, csize, *valp, &usize)) {
+	    if (snappy_uncompress(vent + 1, csize, *valp, &usize)) {
 		ERROR("snappy_uncompress: invalid data");
 		free(*valp);
 		*valp = NULL;
@@ -106,7 +111,7 @@ bool cache_get(struct cache *cache,
 	    ((char *) *valp)[usize] = '\0';
 	}
 	else {
-	    if (snappy_validate_compressed_buffer(cache->vent + 1, csize)) {
+	    if (snappy_validate_compressed_buffer(vent + 1, csize)) {
 		ERROR("snappy_validate_compressed_buffer: invalid data");
 		goto unget;
 	    }
@@ -115,21 +120,21 @@ bool cache_get(struct cache *cache,
 	    *valsizep = usize;
     }
     else {
-	int size = cache->ventsize - sizeof(*cache->vent);
+	int size = ventsize - sizeof(*vent);
 	if (size && valp) {
 	    if ((*valp = malloc(size + 1)) == NULL) {
 		ERROR("malloc: %m");
 		goto unget;
 	    }
-	    memcpy(*valp, cache->vent + 1, size);
+	    memcpy(*valp, vent + 1, size);
 	    ((char *) *valp)[size] = '\0';
 	}
 	if (valsizep)
 	    *valsizep = size;
     }
 
-    if (cache->vent != (void *) cache->vbuf)
-	fs_unget(cache);
+    if (vent != (void *) vbuf)
+	qafs_unget(vent, ventsize);
 
     return true;
 }
@@ -138,37 +143,39 @@ void cache_put(struct cache *cache,
 	const void *key, int keysize,
 	const void *val, int valsize)
 {
-    SHA1(key, keysize, cache->sha1);
+    unsigned char sha1[20] __attribute__((aligned(4)));
+    SHA1(key, keysize, sha1);
 
     int max_csize = snappy_max_compressed_length(valsize);
-    cache->vent = malloc(sizeof(*cache->vent) + max_csize);
-    if (cache->vent == NULL) {
+    struct cache_ent *vent = malloc(sizeof(*vent) + max_csize);
+    int ventsize = valsize;
+    if (vent == NULL) {
 	ERROR("malloc: %m");
 	return;
     }
-    cache->vent->flags = 0;
-    cache->vent->atime = 0;
-    cache->vent->mtime = 0;
-    cache->vent->pad = 0;
+    vent->flags = 0;
+    vent->atime = 0;
+    vent->mtime = 0;
+    vent->pad = 0;
     size_t csize = max_csize;
-    if (snappy_compress(val, valsize, cache->vent + 1, &csize)) {
+    if (snappy_compress(val, valsize, vent + 1, &csize)) {
 	ERROR("snappy_compress: error");
     uncompressed:
-	memcpy(cache->vent + 1, val, valsize);
-	cache->ventsize = sizeof(*cache->vent) + valsize;
+	memcpy(vent + 1, val, valsize);
+	ventsize = sizeof(*vent) + valsize;
     }
     else if (csize >= valsize)
 	goto uncompressed;
     else {
-	cache->vent->flags |= V_SNAPPY;
-	cache->ventsize = sizeof(*cache->vent) + csize;
+	vent->flags |= V_SNAPPY;
+	ventsize = sizeof(*vent) + csize;
     }
 
-    if (cache->ventsize - sizeof(*cache->vent) <= MAX_DB_VAL_SIZE)
-	db_put(cache);
+    if (ventsize - sizeof(*vent) <= MAX_DB_VAL_SIZE)
+	qadb_put(cache, sha1, vent, ventsize);
     else {
-	db_del(cache);
-	fs_put(cache);
+	qadb_del(cache);
+	qafs_put(cache, sha1, vent, ventsize);
     }
 }
 
@@ -178,8 +185,8 @@ void cache_clean(struct cache *cache, int days)
 	ERROR("days must be greater than 0, got %d", days);
 	return;
     }
-    db_clean(cache, days);
-    fs_clean(cache, days);
+    qadb_clean(cache, days);
+    qafs_clean(cache, days);
 }
 
 // ex:ts=8 sts=4 sw=4 noet

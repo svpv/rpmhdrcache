@@ -53,7 +53,7 @@ unsigned h_hash(DB *db, const void *key, unsigned keysize)
     if (sigprocmask(SIG_SETMASK, &cache->oset, NULL)) \
 	ERROR("SIG_SETMASK: %m")
 
-bool db_open(struct cache *cache, const char *dir)
+bool qadb_open(struct cache *cache, const char *dir)
 {
     // initialize signals which we will block
     sigemptyset(&cache->bset);
@@ -125,7 +125,7 @@ bool db_open(struct cache *cache, const char *dir)
     return true;
 }
 
-void db_close(struct cache *cache)
+void qadb_close(struct cache *cache)
 {
     // don't close after fork
     if (cache->pid != getpid())
@@ -150,14 +150,14 @@ void db_close(struct cache *cache)
     UNLOCK_DIR(cache);
 }
 
-bool db_get(struct cache *cache)
+bool qadb_get(struct cache *cache,
+	const unsigned char *sha1,
+	void *vbuf, int *valsize)
 {
-    DBT k = { cache->sha1, 20 };
-    DBT v = { cache->vbuf, 0 };
-    v.ulen = sizeof(cache->vbuf);
+    DBT k = { sha1, 20 };
+    DBT v = { vbuf, 0 };
+    v.ulen = *valsize;
     v.flags |= DB_DBT_USERMEM;
-
-    cache->vent = (void *) cache->vbuf;
 
     // read lock
     LOCK_DIR(cache, LOCK_SH);
@@ -176,20 +176,22 @@ bool db_get(struct cache *cache)
 	return false;
     }
 
-    cache->ventsize = v.size;
+    *valsize = v.size;
     return true;
 }
 
-void db_atime(struct cache *cache)
+void qadb_atime(struct cache *cache,
+	const unsigned char *sha1,
+	struct cache_ent *vent, int ventsize)
 {
-    DBT k = { cache->sha1, 20 };
-    DBT v = { cache->vbuf, 0 };
-    v.ulen = sizeof(cache->vbuf);
+    DBT k = { sha1, 20 };
+    DBT v = { vent, 0 };
+    v.ulen = ventsize;
     v.flags |= DB_DBT_USERMEM;
 
     // partial update, user data unchanged
     v.flags |= DB_DBT_PARTIAL;
-    v.dlen = sizeof(*cache->vent);
+    v.dlen = sizeof(*vent);
 
     LOCK_DIR(cache, LOCK_EX);
     BLOCK_SIGNALS(cache);
@@ -204,8 +206,8 @@ void db_atime(struct cache *cache)
     }
     else {
 	// actual update
-	v.size = sizeof(*cache->vent);
-	cache->vent->atime = cache->now;
+	v.size = sizeof(*vent);
+	vent->atime = cache->now;
 	rc = cache->db->put(cache->db, NULL, &k, &v, 0);
 	UNBLOCK_SIGNALS(cache);
 	UNLOCK_DIR(cache);
@@ -214,12 +216,14 @@ void db_atime(struct cache *cache)
     }
 }
 
-void db_put(struct cache *cache)
+void qadb_put(struct cache *cache,
+	const unsigned char *sha1,
+	struct cache_ent *vent, int ventsize)
 {
-    DBT k = { cache->sha1, 20 };
-    DBT v = { cache->vent, cache->ventsize };
-    cache->vent->mtime = cache->now;
-    cache->vent->atime = cache->now;
+    DBT k = { sha1, 20 };
+    DBT v = { vent, ventsize };
+    vent->mtime = cache->now;
+    vent->atime = cache->now;
 
     LOCK_DIR(cache, LOCK_EX);
     BLOCK_SIGNALS(cache);
@@ -233,9 +237,10 @@ void db_put(struct cache *cache)
 	ERROR("db_put: %s", db_strerror(rc));
 }
 
-void db_del(struct cache *cache)
+void qadb_del(struct cache *cache,
+	const unsigned char *sha1)
 {
-    DBT k = { cache->sha1, 20 };
+    DBT k = { sha1, 20 };
 
     LOCK_DIR(cache, LOCK_EX);
     BLOCK_SIGNALS(cache);
@@ -249,7 +254,7 @@ void db_del(struct cache *cache)
 	ERROR("db_del: %s", db_strerror(rc));
 }
 
-void db_clean(struct cache *cache, int days)
+void qadb_clean(struct cache *cache, int days)
 {
     LOCK_DIR(cache, LOCK_EX);
 
@@ -265,14 +270,16 @@ void db_clean(struct cache *cache, int days)
     }
 
     while (1) {
-	DBT k = { cache->sha1, 0 };
-	k.ulen = sizeof(cache->sha1);
+	unsigned sha1[5];
+	DBT k = { sha1, 0 };
+	k.ulen = sizeof(sha1);
 	k.flags |= DB_DBT_USERMEM;
 
-	cache->vent = (void *) cache->vbuf;
-	DBT v = { cache->vbuf, 0 };
-	v.ulen = sizeof(cache->vbuf);
-	v.dlen = sizeof(cache->vbuf);
+	struct cache_ent vbuf;
+	struct cache_ent *vent = &vbuf;
+	DBT v = { &vbuf, 0 };
+	v.ulen = sizeof(vbuf);
+	v.dlen = sizeof(vbuf);
 	v.flags |= DB_DBT_USERMEM;
 	v.flags |= DB_DBT_PARTIAL;
 
@@ -286,18 +293,18 @@ void db_clean(struct cache *cache, int days)
 	    break;
 	}
 
-	if (k.size < sizeof(cache->sha1)) {
+	if (k.size < sizeof(sha1)) {
 	    ERROR("sha1 too small");
 	    continue;
 	}
 
-	if (v.size < sizeof(*cache->vent)) {
+	if (v.size < sizeof(vent)) {
 	    ERROR("vent too small");
 	    continue;
 	}
 
-	if (cache->vent->mtime + days >= cache->now) continue;
-	if (cache->vent->atime + days >= cache->now) continue;
+	if (vent->mtime + days >= cache->now) continue;
+	if (vent->atime + days >= cache->now) continue;
 
 	BLOCK_SIGNALS(cache);
 	rc = dbc->del(dbc, 0);
