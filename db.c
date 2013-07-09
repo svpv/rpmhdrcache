@@ -154,10 +154,15 @@ bool qadb_get(struct cache *cache,
 	const unsigned char *sha1,
 	struct cache_ent *vent, int *ventsize)
 {
-    DBT k = { sha1, 20 };
-    DBT v = { vent, 0 };
-    v.ulen = *ventsize;
-    v.flags |= DB_DBT_USERMEM;
+    DBT k = {
+	.data = (void *) sha1,
+	.size = 20,
+    };
+    DBT v = {
+	.data = vent,
+	.ulen = *ventsize,
+	.flags = DB_DBT_USERMEM,
+    };
 
     // read lock
     LOCK_DIR(cache, LOCK_SH);
@@ -182,8 +187,8 @@ bool qadb_get(struct cache *cache,
     if (v.size >= sizeof(*vent) && vent->atime < cache->now) {
 	v.size = sizeof(*vent);
 	v.dlen = sizeof(*vent);
-	vent->atime = cache->now;
 	v.flags |= DB_DBT_PARTIAL;
+	vent->atime = cache->now;
 	rc = cache->db->put(cache->db, NULL, &k, &v, 0);
     }
 
@@ -200,8 +205,14 @@ void qadb_put(struct cache *cache,
 	const unsigned char *sha1,
 	struct cache_ent *vent, int ventsize)
 {
-    DBT k = { sha1, 20 };
-    DBT v = { vent, ventsize };
+    DBT k = {
+	.data = (void *) sha1,
+	.size = 20,
+    };
+    DBT v = {
+	.data = vent,
+	.size = ventsize,
+    };
     vent->mtime = cache->now;
     vent->atime = cache->now;
 
@@ -220,7 +231,10 @@ void qadb_put(struct cache *cache,
 void qadb_del(struct cache *cache,
 	const unsigned char *sha1)
 {
-    DBT k = { sha1, 20 };
+    DBT k = {
+	.data = (void *) sha1,
+	.size = 20,
+    };
 
     LOCK_DIR(cache, LOCK_EX);
     BLOCK_SIGNALS(cache);
@@ -250,18 +264,21 @@ void qadb_clean(struct cache *cache, int days)
     }
 
     while (1) {
-	unsigned sha1[5];
-	DBT k = { sha1, 0 };
-	k.ulen = sizeof(sha1);
-	k.flags |= DB_DBT_USERMEM;
+	unsigned char sha1[20] __attribute__((aligned(4)));
+	DBT k = {
+	    .data = sha1,
+	    .ulen = sizeof(sha1),
+	    .flags = DB_DBT_USERMEM,
+	};
 
 	struct cache_ent vbuf;
 	struct cache_ent *vent = &vbuf;
-	DBT v = { &vbuf, 0 };
-	v.ulen = sizeof(vbuf);
-	v.dlen = sizeof(vbuf);
-	v.flags |= DB_DBT_USERMEM;
-	v.flags |= DB_DBT_PARTIAL;
+	DBT v = {
+	    .data = &vbuf,
+	    .ulen = sizeof(vbuf),
+	    .dlen = sizeof(vbuf),
+	    .flags = DB_DBT_USERMEM | DB_DBT_PARTIAL,
+	};
 
 	BLOCK_SIGNALS(cache);
 	rc = dbc->get(dbc, &k, &v, DB_NEXT);
