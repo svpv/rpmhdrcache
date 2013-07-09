@@ -173,6 +173,8 @@ void cache_put(struct cache *cache,
 	qadb_del(cache);
 	qafs_put(cache, sha1, vent, ventsize);
     }
+
+    free(vent);
 }
 
 void cache_clean(struct cache *cache, int days)
