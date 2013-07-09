@@ -23,13 +23,13 @@ static
 unsigned h_hash(DB *db, const void *key, unsigned keysize)
 {
     (void) db;
-    if (keysize == 20)
-	return *(unsigned *) key;
-
-    // handle CHARKEY test string and possibly other data
     unsigned char sha1[20] __attribute__((aligned(4)));
-    SHA1(key, keysize, sha1);
-    return *(unsigned *) sha1;
+    // handle CHARKEY test string and possibly other data
+    if (keysize != 20) {
+	SHA1(key, keysize, sha1);
+	key = sha1;
+    }
+    return *(unsigned *) key;
 }
 
 #include <sys/file.h>
