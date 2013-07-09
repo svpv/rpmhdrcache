@@ -152,11 +152,11 @@ void qadb_close(struct cache *cache)
 
 bool qadb_get(struct cache *cache,
 	const unsigned char *sha1,
-	void *vbuf, int *valsize)
+	struct cache_ent *vent, int *ventsize)
 {
     DBT k = { sha1, 20 };
-    DBT v = { vbuf, 0 };
-    v.ulen = *valsize;
+    DBT v = { vent, 0 };
+    v.ulen = *ventsize;
     v.flags |= DB_DBT_USERMEM;
 
     // read lock
@@ -167,53 +167,33 @@ bool qadb_get(struct cache *cache,
 
     int rc = cache->db->get(cache->db, NULL, &k, &v, 0);
 
-    UNBLOCK_SIGNALS(cache);
-    UNLOCK_DIR(cache);
-
     if (rc) {
+	UNBLOCK_SIGNALS(cache);
+	UNLOCK_DIR(cache);
 	if (rc != DB_NOTFOUND)
 	    ERROR("db_get: %s", db_strerror(rc));
 	return false;
     }
 
-    *valsize = v.size;
-    return true;
-}
+    // sucessful return
+    *ventsize = v.size;
 
-void qadb_atime(struct cache *cache,
-	const unsigned char *sha1,
-	struct cache_ent *vent, int ventsize)
-{
-    DBT k = { sha1, 20 };
-    DBT v = { vent, 0 };
-    v.ulen = ventsize;
-    v.flags |= DB_DBT_USERMEM;
-
-    // partial update, user data unchanged
-    v.flags |= DB_DBT_PARTIAL;
-    v.dlen = sizeof(*vent);
-
-    LOCK_DIR(cache, LOCK_EX);
-    BLOCK_SIGNALS(cache);
-
-    // the record must be still there
-    int rc = cache->db->get(cache->db, NULL, &k, &v, DB_GET_BOTH);
-    if (rc) {
-	UNBLOCK_SIGNALS(cache);
-	UNLOCK_DIR(cache);
-	if (rc != DB_NOTFOUND)
-	    ERROR("db_get: %s", db_strerror(rc));
-    }
-    else {
-	// actual update
+    // update atime
+    if (v.size >= sizeof(*vent) && vent->atime < cache->now) {
 	v.size = sizeof(*vent);
+	v.dlen = sizeof(*vent);
 	vent->atime = cache->now;
+	v.flags |= DB_DBT_PARTIAL;
 	rc = cache->db->put(cache->db, NULL, &k, &v, 0);
-	UNBLOCK_SIGNALS(cache);
-	UNLOCK_DIR(cache);
-	if (rc)
-	    ERROR("db_put: %s", db_strerror(rc));
     }
+
+    UNBLOCK_SIGNALS(cache);
+    UNLOCK_DIR(cache);
+
+    if (rc)
+	ERROR("db_put: %s", db_strerror(rc));
+
+    return true;
 }
 
 void qadb_put(struct cache *cache,

@@ -84,10 +84,6 @@ bool cache_get(struct cache *cache,
 	return false;
     }
 
-    // update db atime
-    if (vent == (void *) vbuf && vent->atime < cache->now)
-	qadb_atime(cache, sha1, vent, ventsize);
-
     // prepare for return
     if (vent->flags & V_SNAPPY) {
 	// uncompress

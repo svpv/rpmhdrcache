@@ -57,10 +57,7 @@ void qafs_clean(struct cache *cache, int days);
 bool qadb_open(struct cache *cache, const char *dir);
 bool qadb_get(struct cache *cache,
 	const unsigned char *sha1,
-	void *vbuf, int *valsize);
-void qadb_atime(struct cache *cache,
-	const unsigned char *sha1,
-	struct cache_ent *vent, int ventsize);
+	struct cache_ent *vent, int *ventsize);
 void qadb_put(struct cache *cache,
 	const unsigned char *sha1,
 	struct cache_ent *vent, int ventsize);
