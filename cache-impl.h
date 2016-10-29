@@ -61,6 +61,8 @@ bool qadb_get(struct cache *cache,
 void qadb_put(struct cache *cache,
 	const unsigned char *sha1,
 	struct cache_ent *vent, int ventsize);
+void qadb_del(struct cache *cache,
+	const unsigned char *sha1);
 void qadb_close(struct cache *cache);
 void qadb_clean(struct cache *cache, int days);
 

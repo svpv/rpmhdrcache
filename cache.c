@@ -170,7 +170,7 @@ void cache_put(struct cache *cache,
     if (ventsize - sizeof(*vent) <= MAX_DB_VAL_SIZE)
 	qadb_put(cache, sha1, vent, ventsize);
     else {
-	qadb_del(cache);
+	qadb_del(cache, sha1);
 	qafs_put(cache, sha1, vent, ventsize);
     }
 
