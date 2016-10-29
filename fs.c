@@ -47,7 +47,7 @@ bool qafs_get(struct cache *cache,
 	return false;
     }
     int valsize = st.st_size;
-    void *val = mmap(NULL, valsize, PROT_READ, MAP_SHARED, fd, 0);
+    void *val = mmap(NULL, valsize, PROT_READ, MAP_SHARED | MAP_POPULATE, fd, 0);
     if (val == MAP_FAILED) {
 	ERROR("mmap: %m");
 	close(fd);
@@ -96,7 +96,7 @@ void qafs_put(struct cache *cache,
 	close(fd);
 	return;
     }
-    void *dest = mmap(NULL, valsize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    void *dest = mmap(NULL, valsize, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, fd, 0);
     if (dest == MAP_FAILED) {
 	ERROR("mmap: %m");
 	close(fd);
