@@ -69,16 +69,16 @@ bool cache_get(struct cache *cache,
     if (valsizep)
 	*valsizep = 0;
 
-    unsigned char sha1[20] __attribute__((aligned(4)));
-    SHA1(key, keysize, sha1);
-
     char vbuf[sizeof(struct cache_ent) + MAX_DB_VAL_SIZE] __attribute__((aligned(4)));
     struct cache_ent *vent = (void *) vbuf;
     int ventsize = sizeof(vbuf);
 
-    if (!qadb_get(cache, sha1, vent, &ventsize))
+    if (!qadb_get(cache, key, keysize, vent, &ventsize)) {
+	unsigned char sha1[20] __attribute__((aligned(4)));
+	SHA1(key, keysize, sha1);
 	if (!qafs_get(cache, sha1, (void **) &vent, &ventsize))
 	    return false;
+    }
 
     // validate
     if (ventsize < sizeof(*vent)) {
@@ -148,9 +148,6 @@ void cache_put(struct cache *cache,
 	const void *key, int keysize,
 	const void *val, int valsize)
 {
-    unsigned char sha1[20] __attribute__((aligned(4)));
-    SHA1(key, keysize, sha1);
-
     int max_valsize;
     if (valsize < MIN_COMPRESS_SIZE)
 	max_valsize = valsize;
@@ -192,9 +189,11 @@ void cache_put(struct cache *cache,
     }
 
     if (ventsize - sizeof(*vent) <= MAX_DB_VAL_SIZE)
-	qadb_put(cache, sha1, vent, ventsize);
+	qadb_put(cache, key, keysize, vent, ventsize);
     else {
-	qadb_del(cache, sha1);
+	qadb_del(cache, key, keysize);
+	unsigned char sha1[20] __attribute__((aligned(4)));
+	SHA1(key, keysize, sha1);
 	qafs_put(cache, sha1, vent, ventsize);
     }
 

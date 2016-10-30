@@ -58,13 +58,13 @@ void qafs_clean(struct cache *cache, int days);
 
 bool qadb_open(struct cache *cache, const char *dir);
 bool qadb_get(struct cache *cache,
-	const unsigned char *sha1,
+	const void *key, int keysize,
 	struct cache_ent *vent, int *ventsize);
 void qadb_put(struct cache *cache,
-	const unsigned char *sha1,
+	const void *key, int keysize,
 	struct cache_ent *vent, int ventsize);
 void qadb_del(struct cache *cache,
-	const unsigned char *sha1);
+	const void *key, int keysize);
 void qadb_close(struct cache *cache);
 void qadb_clean(struct cache *cache, int days);
 

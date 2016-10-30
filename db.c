@@ -15,23 +15,6 @@ void msgcall(const DB_ENV *env, const char *msg)
     ERROR("%s", msg);
 }
 
-#include <openssl/sha.h>
-
-// All user keys are hashed with sha1, and sha1 sum is then used as db key.
-// To avoid double hashing, we also use part of sha1 sum as internal db hash.
-static
-unsigned h_hash(DB *db, const void *key, unsigned keysize)
-{
-    (void) db;
-    unsigned char sha1[20] __attribute__((aligned(4)));
-    // handle CHARKEY test string and possibly other data
-    if (keysize != 20) {
-	SHA1(key, keysize, sha1);
-	key = sha1;
-    }
-    return *(unsigned *) key;
-}
-
 #include <sys/file.h>
 
 #define LOCK_DIR(cache, op) \
@@ -106,12 +89,9 @@ bool qadb_open(struct cache *cache, const char *dir)
 	goto undo;
     }
 
-    // configure db
-    cache->db->set_h_hash(cache->db, h_hash);
-
     // open db
     rc = cache->db->open(cache->db, NULL, "cache.db", NULL,
-	    DB_HASH, DB_CREATE, 0666);
+	    DB_BTREE, DB_CREATE, 0666);
     if (rc) {
 	ERROR("db_open: %s", db_strerror(rc));
 	cache->db->close(cache->db, 0);
@@ -151,12 +131,12 @@ void qadb_close(struct cache *cache)
 }
 
 bool qadb_get(struct cache *cache,
-	const unsigned char *sha1,
+	const void *key, int keysize,
 	struct cache_ent *vent, int *ventsize)
 {
     DBT k = {
-	.data = (void *) sha1,
-	.size = 20,
+	.data = key,
+	.size = keysize,
     };
     DBT v = {
 	.data = vent,
@@ -202,12 +182,12 @@ bool qadb_get(struct cache *cache,
 }
 
 void qadb_put(struct cache *cache,
-	const unsigned char *sha1,
+	const void *key, int keysize,
 	struct cache_ent *vent, int ventsize)
 {
     DBT k = {
-	.data = (void *) sha1,
-	.size = 20,
+	.data = key,
+	.size = keysize,
     };
     DBT v = {
 	.data = vent,
@@ -229,11 +209,11 @@ void qadb_put(struct cache *cache,
 }
 
 void qadb_del(struct cache *cache,
-	const unsigned char *sha1)
+	const void *key, int keysize)
 {
     DBT k = {
-	.data = (void *) sha1,
-	.size = 20,
+	.data = key,
+	.size = keysize,
     };
 
     LOCK_DIR(cache, LOCK_EX);
