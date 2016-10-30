@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <unistd.h>
 #include <errno.h>
 #include <signal.h>
@@ -22,6 +23,7 @@
 
 struct cache_ent {
 #define V_SNAPPY (1 << 0)
+#define V_ZSTD   (1 << 1)
     unsigned short flags;
     unsigned short mtime;
     unsigned short atime;

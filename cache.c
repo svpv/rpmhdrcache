@@ -52,8 +52,13 @@ void cache_close(struct cache *cache)
 
 #include <openssl/sha.h>
 
-// Fast compression and decompression from Google.
-#include <snappy-c.h>
+// Fast compression and decompression from Facebook.
+#include <zstd.h>
+
+// When compressing a sequence of 17 repeated characters,
+// zstd's output size is 17.  So it is pointless to even
+// try to compress anything below this size:
+#define MIN_COMPRESS_SIZE 18
 
 bool cache_get(struct cache *cache,
 	const void *key, int keysize,
@@ -86,11 +91,20 @@ bool cache_get(struct cache *cache,
 
     // prepare for return
     if (vent->flags & V_SNAPPY) {
+	// We used to have snappy, but zstd provides a much better compromise
+	// for big data sets which we have; so, force a miss.
+	goto unget;
+    }
+    else if (vent->flags & V_ZSTD) {
 	// uncompress
 	int csize = ventsize - sizeof(*vent);
-	size_t usize;
-	if (snappy_uncompressed_length(vent + 1, csize, &usize)) {
-	    ERROR("snappy_uncompressed_length: invalid data");
+	if (csize < 1) {
+	    ERROR("compressed vent too small");
+	    goto unget;
+	}
+	size_t usize = ZSTD_getDecompressedSize(vent + 1, csize);
+	if (usize < MIN_COMPRESS_SIZE || usize > INT_MAX) {
+	    ERROR("ZSTD_getDecompressedSize: invalid data");
 	    goto unget;
 	}
 	if (valp) {
@@ -98,19 +112,14 @@ bool cache_get(struct cache *cache,
 		ERROR("malloc: %m");
 		goto unget;
 	    }
-	    if (snappy_uncompress(vent + 1, csize, *valp, &usize)) {
-		ERROR("snappy_uncompress: invalid data");
+	    usize = ZSTD_decompress(*valp, usize, vent + 1, csize);
+	    if (usize < MIN_COMPRESS_SIZE || usize > INT_MAX) {
+		ERROR("ZSTD_decompress: invalid data");
 		free(*valp);
 		*valp = NULL;
 		goto unget;
 	    }
 	    ((char *) *valp)[usize] = '\0';
-	}
-	else {
-	    if (snappy_validate_compressed_buffer(vent + 1, csize)) {
-		ERROR("snappy_validate_compressed_buffer: invalid data");
-		goto unget;
-	    }
 	}
 	if (valsizep)
 	    *valsizep = usize;
@@ -142,9 +151,18 @@ void cache_put(struct cache *cache,
     unsigned char sha1[20] __attribute__((aligned(4)));
     SHA1(key, keysize, sha1);
 
-    int max_csize = snappy_max_compressed_length(valsize);
-    struct cache_ent *vent = malloc(sizeof(*vent) + max_csize);
-    int ventsize = valsize;
+    int max_valsize;
+    if (valsize < MIN_COMPRESS_SIZE)
+	max_valsize = valsize;
+    else {
+	max_valsize = ZSTD_compressBound(valsize);
+	if (max_valsize < valsize) {
+	    ERROR("ZSTD_compressBound: error");
+	    return;
+	}
+    }
+
+    struct cache_ent *vent = malloc(sizeof(*vent) + max_valsize);
     if (vent == NULL) {
 	ERROR("malloc: %m");
 	return;
@@ -153,17 +171,23 @@ void cache_put(struct cache *cache,
     vent->atime = 0;
     vent->mtime = 0;
     vent->pad = 0;
-    size_t csize = max_csize;
-    if (snappy_compress(val, valsize, vent + 1, &csize)) {
-	ERROR("snappy_compress: error");
+
+    int ventsize;
+    if (valsize < MIN_COMPRESS_SIZE) {
     uncompressed:
 	memcpy(vent + 1, val, valsize);
 	ventsize = sizeof(*vent) + valsize;
     }
-    else if (csize >= valsize)
-	goto uncompressed;
     else {
-	vent->flags |= V_SNAPPY;
+	size_t csize = ZSTD_compress(vent + 1, max_valsize, val, valsize, 3);
+	if (csize < 1 || csize > INT_MAX) {
+	    ERROR("ZSTD_compress: error");
+	    free(vent);
+	    return;
+	}
+	if (csize >= valsize)
+	    goto uncompressed;
+	vent->flags |= V_ZSTD;
 	ventsize = sizeof(*vent) + csize;
     }
 
