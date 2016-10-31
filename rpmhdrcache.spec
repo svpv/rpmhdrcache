@@ -1,5 +1,5 @@
 Name: rpmhdrcache
-Version: 0.3
+Version: 0.5
 Release: alt1
 
 Summary: Cached reading of rpm package headers
@@ -25,18 +25,12 @@ caches the result using libqacache library.
 %setup -q
 
 %build
-gcc -std=gnu99 -shared -fPIC -D_GNU_SOURCE %optflags -o libqacache.so.0 -Wl,-soname,libqacache.so.0 cache.c db.c fs.c \
-	-ldb -lcrypto -lsnappy -Wl,-z,defs
-gcc -std=gnu99 -shared -fPIC -D_GNU_SOURCE %optflags -o rpmhdrcache.so preload.c hdrcache.c \
-	-Wl,--no-as-needed -lrpmio -lrpm -Wl,--as-needed -lrpmdb -ldl libqacache.so.0 -Wl,-z,defs
-gcc -std=gnu99 -D_GNU_SOURCE %optflags -o qacache-clean clean.c libqacache.so.0
+autoreconf -fisv
+%configure --disable-static
+make
 
 %install
-install -pD -m644 cache.h %buildroot%_includedir/qa/cache.h
-install -pD -m644 libqacache.so.0 %buildroot%_libdir/libqacache.so.0
-ln -s libqacache.so.0 %buildroot%_libdir/libqacache.so
-install -pD -m644 rpmhdrcache.so %buildroot%_libdir/rpmhdrcache.so
-install -pD -m755 qacache-clean %buildroot%_bindir/qacache-clean
+make install DESTDIR=%buildroot
 
 %files
 %_libdir/rpmhdrcache.so
@@ -63,7 +57,7 @@ Small- to medium-sized cache entries (up to 32K compressed with snappy)
 are stored in a Berkeley DB, larger entries are backed by filesystem.
 
 %files -n libqacache
-%_libdir/libqacache.so.0
+%_libdir/libqacache.so.0*
 %_bindir/qacache-clean
 
 %files -n libqacache-devel
