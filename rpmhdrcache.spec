@@ -11,8 +11,8 @@ Source: %name-%version.tar
 
 Requires: libqacache = %version-%release
 
-# Automatically added by buildreq on Thu Jun 23 2011
-BuildRequires: libdb4-devel librpm-devel libsnappy-devel libssl-devel
+# Automatically added by buildreq on Tue Nov 15 2016
+BuildRequires: gperf libdb4-devel librpm-devel libssl-devel libzstd-devel
 
 %description
 Sisyphus repository currently has more than 10K source packages (which is
