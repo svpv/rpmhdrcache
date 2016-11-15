@@ -15,3 +15,7 @@ otherinclude_HEADERS = cache.h rpmcache.h
 bin_PROGRAMS = qacache-clean
 qacache_clean_SOURCES = clean.c
 qacache_clean_LDADD = libqacache.la
+
+rpmcache.lo: rpmarch.h
+rpmarch.h: rpmarch.gperf
+	gperf <$< >$@

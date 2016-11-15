@@ -6,6 +6,7 @@
 #include <sys/stat.h> // mkdir
 #include "cache.h"
 #include "rpmcache.h"
+#include "rpmarch.h"
 
 #define ERROR(fmt, args...) \
     fprintf(stderr, "%s: %s: " fmt "\n", \
@@ -14,8 +15,8 @@
 // cache for an architecture
 struct acache {
     struct cache *cache;
-    // the longest arch is alphapca56, len=10
-    char arch[16];
+    // points to gperf static memory
+    const char *arch;
 };
 
 struct rpmcache {
