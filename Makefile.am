@@ -10,7 +10,7 @@ rpmhdrcache_la_LDFLAGS = -module -avoid-version -shared \
 	-Wl,--no-as-needed -lrpmio -lrpm -Wl,--as-needed -no-undefined -Wl,--no-undefined
 
 otherincludedir = $(includedir)/qa
-otherinclude_HEADERS = cache.h
+otherinclude_HEADERS = cache.h rpmcache.h
 
 bin_PROGRAMS = qacache-clean
 qacache_clean_SOURCES = clean.c
