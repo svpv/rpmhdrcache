@@ -68,9 +68,7 @@ int make_key(const char *path, const struct stat *st, char *key)
     return len + 1 + sizeof sm;
 }
 
-#define ERROR(fmt, args...) \
-    fprintf(stderr, "%s: %s: " fmt "\n", \
-	    program_invocation_short_name, __func__, ##args)
+#include "error.h"
 
 struct cache_ent {
     unsigned off;

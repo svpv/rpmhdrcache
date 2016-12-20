@@ -10,10 +10,7 @@
 #include <fcntl.h>
 #include <stdbool.h>
 #include <db.h>
-
-#define ERROR(fmt, args...) \
-    fprintf(stderr, "%s: %s: " fmt "\n", \
-	    program_invocation_short_name, __func__, ##args)
+#include "error.h"
 
 #define SET_UMASK(cache) \
     cache->omask = umask(cache->umask)

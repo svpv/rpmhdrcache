@@ -7,10 +7,7 @@
 #include "cache.h"
 #include "rpmcache.h"
 #include "rpmarch.h"
-
-#define ERROR(fmt, args...) \
-    fprintf(stderr, "%s: %s: " fmt "\n", \
-	    program_invocation_short_name, __func__, ##args)
+#include "error.h"
 
 // cache for an architecture
 struct acache {
