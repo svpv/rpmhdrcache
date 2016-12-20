@@ -8,20 +8,7 @@
 #include "rpmcache.h"
 #include "rpmarch.h"
 #include "error.h"
-
-// cache for an architecture
-struct acache {
-    struct cache *cache;
-    // points to gperf static memory
-    const char *arch;
-};
-
-struct rpmcache {
-    // the smallest possible LRU cache (for two architecures)
-    struct acache ac[2];
-    // in this dir, there will be arch subdirs
-    char dir[];
-};
+#include "cache.h"
 
 // prepend toplevel dir, i.e. make ~/.rpmcache/dir string
 static char *catdir(const char *dir, size_t *plen)
@@ -91,16 +78,8 @@ struct rpmcache *rpmcache_open(const char *dir)
 	return NULL;
     }
 
-    // allocate rpmcache
-    struct rpmcache *c = malloc(sizeof(*c) + fulldlen + 1);
-    if (c == NULL) {
-	ERROR("malloc: %m");
-	return NULL;
-    }
-    memset(c->ac, 0, sizeof c->ac);
-    memcpy(c->dir, fulldir, fulldlen + 1);
-    free(fulldir);
-    return c;
+    // open the cache
+    return (struct rpmcache *) cache_open(fulldir);
 }
 
 /*
@@ -183,19 +162,24 @@ bool rpmcache_get(struct rpmcache *rpmcache,
 	const char *fname, unsigned fsize, unsigned mtime,
 	void **valp, int *valsizep)
 {
-    struct key k;
-    if (!make_key(&k, fname, fsize, mtime))
-	return false;
-    return false;
+    return
+    bsm_get((struct cache *) rpmcache,
+	    fname, ".rpm", fsize, mtime,
+	    valp, valsizep);
 }
 
 void rpmcache_put(struct rpmcache *rpmcache,
 	const char *fname, unsigned fsize, unsigned mtime,
 	const void *val, int valsize)
 {
-    struct key k;
-    if (!make_key(&k, fname, fsize, mtime))
-	return;
+    bsm_put((struct cache *) rpmcache,
+	    fname, ".rpm", fsize, mtime,
+	    val, valsize);
+}
+
+void rpmcache_close(struct rpmcache *rpmcache)
+{
+    cache_close((struct cache *) rpmcache);
 }
 
 // ex:ts=8 sts=4 sw=4 noet
