@@ -1,6 +1,6 @@
 AM_CFLAGS = -Wall -Wextra -D_GNU_SOURCE
 lib_LTLIBRARIES = libqacache.la rpmhdrcache.la
-libqacache_la_SOURCES = cache.c db.c fs.c rpmcache.c
+libqacache_la_SOURCES = cache.c db.c fs.c bsm.c rpmcache.c
 libqacache_la_LIBADD = -ldb -lcrypto -lzstd
 libqacache_la_LDFLAGS = -no-undefined -Wl,--no-undefined
 

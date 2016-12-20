@@ -32,6 +32,21 @@ void cache_put(struct cache *cache,
 	const void *key, int keysize,
 	const void *val, int valsize);
 
+/*
+ * These wrappers simplify file processing when files are identified by their
+ * (basename,size,mtime) triple.  This is useful when filenames convey some
+ * information about file content, such as the case with rpm and sometimes
+ * mp3 files.  Thus ext can be ".rpm" or ".mp3", like in basename(1), or NULL.
+ */
+bool bsm_get(struct cache *cache,
+	const char *fname, const char *ext,
+	unsigned fsize, unsigned mtime,
+	void **valp /* malloc'd */, int *valsizep);
+void bsm_put(struct cache *cache,
+	const char *fname, const char *ext,
+	unsigned fsize, unsigned mtime,
+	const void *val, int valsize);
+
 #ifdef __cplusplus
 }
 #endif
