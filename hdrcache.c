@@ -11,16 +11,16 @@
 #include <unistd.h>
 #include <errno.h>
 #include <rpm/rpmlib.h>
-#include "cache.h"
+#include "rpmcache.h"
 #include "hdrcache.h"
 
 static __thread
-struct cache *cache;
+struct rpmcache *cache;
 
 static
 void finalize()
 {
-    cache_close(cache);
+    rpmcache_close(cache);
 }
 
 static inline
@@ -45,8 +45,8 @@ int initialize()
     }
     const char *dir = opt("DIR");
     if (dir == NULL)
-	dir = "/tmp/.rpmhdrcache";
-    cache = cache_open(dir);
+	dir = "rpmhdrcache";
+    cache = rpmcache_open(dir);
     if (cache == NULL) {
 	initialized = -1;
 	return initialized;
@@ -54,18 +54,6 @@ int initialize()
     initialized = 1;
     atexit(finalize);
     return initialized;
-}
-
-static
-int make_key(const char *path, const struct stat *st, char *key)
-{
-    const char *bn = strrchr(path, '/');
-    bn = bn ? (bn + 1) : path;
-    strcpy(key, bn);
-    unsigned sm[2] = { st->st_size, st->st_mtime };
-    int len = strlen(bn);
-    memcpy(key + len + 1, sm, sizeof sm);
-    return len + 1 + sizeof sm;
 }
 
 #include "error.h"
@@ -79,15 +67,15 @@ Header hdrcache_get(const char *path, const struct stat *st, unsigned *off)
 {
     if (initialize() < 0)
 	return NULL;
-    char key[4096];
-    int keysize = make_key(path, st, key);
     struct cache_ent *data;
     int datasize;
-    if (!cache_get(cache, key, keysize, (void **) &data, &datasize))
+    if (!rpmcache_get(cache, path, st->st_size, st->st_mtime, (void **) &data, &datasize))
 	return NULL;
     Header h = headerCopyLoad(data->blob);
     if (h == NULL) {
-	ERROR("%s: headerLoad failed", key);
+	const char *bn = strrchr(path, '/');
+	bn = bn ? bn + 1 : path;
+	ERROR("%s: headerLoad failed", bn);
 	return NULL;
     }
     if (off)
@@ -100,12 +88,12 @@ void hdrcache_put(const char *path, const struct stat *st, Header h, unsigned of
 {
     if (initialize() < 0)
 	return;
-    char key[4096];
-    int keysize = make_key(path, st, key);
     int blobsize = headerSizeof(h, HEADER_MAGIC_NO);
     void *blob = headerUnload(h);
     if (blob == NULL) {
-	ERROR("%s: headerLoad failed", key);
+	const char *bn = strrchr(path, '/');
+	bn = bn ? bn + 1 : path;
+	ERROR("%s: headerLoad failed", bn);
 	return;
     }
     int datasize = sizeof(unsigned) + blobsize;
@@ -117,7 +105,7 @@ void hdrcache_put(const char *path, const struct stat *st, Header h, unsigned of
     data->off = off;
     memcpy(data->blob, blob, blobsize);
     free(blob);
-    cache_put(cache, key, keysize, data, datasize);
+    rpmcache_put(cache, path, st->st_size, st->st_mtime, data, datasize);
     free(data);
 }
 
