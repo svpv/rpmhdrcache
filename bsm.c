@@ -2,6 +2,7 @@
 #include <limits.h>
 #include "cache.h"
 #include "error.h"
+#include "sm3.h"
 
 static int bsm_key(char *key,
 	const char *fname, const char *ext,
@@ -23,7 +24,8 @@ static int bsm_key(char *key,
     }
     memcpy(key, bn, len);
     key[len] = '\0';
-    unsigned sm[2] = { fsize, mtime };
+    unsigned short sm[3];
+    sm3(fsize, mtime, sm);
     memcpy(key + len + 1, sm, sizeof sm);
     return len + 1 + sizeof sm;
 }
@@ -33,7 +35,7 @@ bool bsm_get(struct cache *cache,
 	unsigned fsize, unsigned mtime,
 	void **valp, int *valsizep)
 {
-    char key[NAME_MAX + 1 + 2 * sizeof(unsigned)];
+    char key[NAME_MAX + 1 + 3 * sizeof(short)];
     int keysize = bsm_key(key, fname, ext, fsize, mtime);
     if (keysize < 1)
 	return false;
@@ -45,7 +47,7 @@ void bsm_put(struct cache *cache,
 	unsigned fsize, unsigned mtime,
 	const void *val, int valsize)
 {
-    char key[NAME_MAX + 1 + 2 * sizeof(unsigned)];
+    char key[NAME_MAX + 1 + 3 * sizeof(short)];
     int keysize = bsm_key(key, fname, ext, fsize, mtime);
     if (keysize < 1)
 	return;
