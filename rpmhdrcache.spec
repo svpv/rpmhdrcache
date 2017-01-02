@@ -1,5 +1,5 @@
 Name: rpmhdrcache
-Version: 0.5
+Version: 0.6
 Release: alt1
 
 Summary: Cached reading of rpm package headers
@@ -9,7 +9,7 @@ Group: System/Configuration/Packaging
 URL: http://git.altlinux.org/gears/r/rpmhdrcache.git
 Source: %name-%version.tar
 
-Requires: libqacache = %version-%release
+Requires: librpmcache = %version-%release
 
 # Automatically added by buildreq on Tue Nov 15 2016
 BuildRequires: gperf libdb4-devel librpm-devel libssl-devel libzstd-devel
@@ -19,7 +19,7 @@ Sisyphus repository currently has more than 10K source packages (which is
 more than 60K rpm files with subpackages).  To assist repeated repo scanning
 (which is required for each repo update), this package provides rpmhdrcache.so
 perloadable module.  This module intercepts rpmReadPackageHeader calls and
-caches the result using libqacache library.
+caches the result using librpmcache library.
 
 %prep
 %setup -q
@@ -31,39 +31,46 @@ make
 
 %install
 make install DESTDIR=%buildroot
+ln -s librpmcache.so %buildroot%_libdir/libqacache.so
 
 %files
 %_libdir/rpmhdrcache.so
 
-%package -n libqacache
+%package -n librpmcache
 Summary: NoSQL solution for data caching
 Group: System/Libraries
+# due to qacache-clean
+Conflicts: libqacache
 
-%package -n libqacache-devel
+%package -n librpmcache-devel
 Summary: NoSQL solution for data caching
 Group: Development/C
-Requires: libqacache = %version-%release
+Requires: librpmcache = %version-%release
+Provides: libqacache-devel = %version
+Obsoletes: libqacache-devel < %version
 
-%description -n libqacache
+%description -n librpmcache
 This library implements simple key-value cache API with limited support
 for concurrent reads, atomic writes, data integrity, and atime cleanup.
 Small- to medium-sized cache entries (up to 32K compressed with snappy)
 are stored in a Berkeley DB, larger entries are backed by filesystem.
 
-%description -n libqacache-devel
+%description -n librpmcache-devel
 This library implements simple key-value cache API with limited support
 for concurrent reads, atomic writes, data integrity, and atime cleanup.
 Small- to medium-sized cache entries (up to 32K compressed with snappy)
 are stored in a Berkeley DB, larger entries are backed by filesystem.
 
-%files -n libqacache
-%_libdir/libqacache.so.0*
+%files -n librpmcache
+%_libdir/librpmcache.so.0*
 %_bindir/qacache-clean
 
-%files -n libqacache-devel
+%files -n librpmcache-devel
 %dir %_includedir/qa
 %_includedir/qa/cache.h
+%_includedir/rpmcache.h
 %_libdir/libqacache.so
+%_libdir/librpmcache.so
 
 %changelog
 * Tue Oct 04 2011 Alexey Tourbin <at@altlinux.ru> 0.3-alt1
