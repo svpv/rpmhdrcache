@@ -25,33 +25,40 @@ bool endswith(const char *str, const char *suffix)
    return true;
 }
 
-static __thread
-const char *last_path;
+// The cache works in two stages: first, it traces each Fopen() call and
+// remembers the argument.  Then, if rpmReadPackageFile(fd) call follows,
+// it checks to see if the fd is referencing the last open file.
+struct last {
+    char *path;
+    struct stat st;
+    FD_t fd;
+};
 
 static __thread
-FD_t last_fd;
-
-static __thread
-struct stat last_st;
+struct last thr_last;
 
 __attribute__((visibility("default"),externally_visible))
 FD_t Fopen(const char *path, const char *fmode)
 {
-    last_path = _free(last_path);
-    last_fd = NULL;
-    static __thread
-    FD_t (*Fopen_next)(const char *path, const char *fmode);
-    if (Fopen_next == NULL) {
-	Fopen_next = dlsym(RTLD_NEXT, __func__);
-	assert(Fopen_next);
+    // pthread_getspecific(3) called only once
+    struct last *last = &thr_last;
+    if (last->path) {
+	free(last->path);
+	last->fd = NULL;
     }
-    FD_t fd = Fopen_next(path, fmode);
+    static // no need for thread var or write barrier
+    FD_t (*next)(const char *path, const char *fmode);
+    if (next == NULL) {
+	next = dlsym(RTLD_NEXT, __func__);
+	assert(next);
+    }
+    FD_t fd = next(path, fmode);
     if (fd && endswith(path, ".rpm") && *fmode == 'r' &&
-	stat(path, &last_st) == 0 && S_ISREG(last_st.st_mode))
+	stat(path, &last->st) == 0 && S_ISREG(last->st.st_mode))
     {
-	last_path = strdup(path);
-	if (last_path)
-	    last_fd = fd;
+	last->path = strdup(path);
+	if (last->path)
+	    last->fd = fd;
     }
     return fd;
 }
@@ -59,56 +66,41 @@ FD_t Fopen(const char *path, const char *fmode)
 #include "hdrcache.h"
 
 __attribute__((visibility("default"),externally_visible))
-rpmRC rpmReadPackageHeader(FD_t fd, Header *hdrp,
-	int *isSource, int *major, int *minor)
+rpmRC rpmReadPackageFile(rpmts ts, FD_t fd, const char *fn, Header *hdrp)
 {
     Header hdr_;
-    int isSource_, major_, minor_;
     if (hdrp == NULL)
 	hdrp = &hdr_;
-    if (isSource == NULL)
-	isSource = &isSource_;
-    if (major == NULL)
-	major = &major_;
-    if (minor == NULL)
-	minor = &minor_;
-    static __thread
-    rpmRC (*rpmReadPackageHeader_next)(FD_t fd, Header *hdrp,
-	    int *isSource, int *major, int *minor);
-    if (rpmReadPackageHeader_next == NULL) {
-	rpmReadPackageHeader_next = dlsym(RTLD_NEXT, __func__);
-	assert(rpmReadPackageHeader_next);
-    }
     struct stat st;
+    struct last *last = &thr_last;
     bool match =
-	fd && fd == last_fd &&
-	stat(last_path, &st) == 0 && S_ISREG(st.st_mode) &&
-	st.st_dev == last_st.st_dev && st.st_ino == last_st.st_ino &&
-	st.st_size == last_st.st_size && st.st_mtime == last_st.st_mtime;
+	fd && fd == last->fd &&
+	stat(last->path, &st) == 0 && S_ISREG(st.st_mode) &&
+	st.st_dev == last->st.st_dev && st.st_ino == last->st.st_ino &&
+	st.st_size == last->st.st_size && st.st_mtime == last->st.st_mtime;
     if (match) {
 	unsigned off;
-	*hdrp = hdrcache_get(last_path, &st, &off);
+	*hdrp = hdrcache_get(last->path, &st, &off);
 	if (*hdrp) {
 	    int pos = lseek(Fileno(fd), off, SEEK_SET);
 	    if (pos != off)
 		*hdrp = headerFree(*hdrp);
-	    else {
-		*isSource = !headerIsEntry(*hdrp, RPMTAG_SOURCERPM);
-		*major = 3;
-		*minor = 0;
+	    else
 		return RPMRC_OK;
-	    }
 	}
     }
-    rpmRC rc = rpmReadPackageHeader_next(fd, hdrp, isSource, major, minor);
+    static
+    rpmRC (*next)(rpmts ts, FD_t fd, const char *fn, Header *hdrp);
+    if (next == NULL) {
+	next = dlsym(RTLD_NEXT, __func__);
+	assert(next);
+    }
+    rpmRC rc = next(ts, fd, fn, hdrp);
     if (match) {
-	if (rc == RPMRC_OK && *major == 3 && *minor == 0) {
-	    int realSource = !headerIsEntry(*hdrp, RPMTAG_SOURCERPM);
-	    if (realSource == *isSource) {
-		int pos = lseek(Fileno(fd), 0, SEEK_CUR);
-		if (pos > 0)
-		    hdrcache_put(last_path, &st, *hdrp, pos);
-	    }
+	if (rc == RPMRC_OK || rc == RPMRC_NOTTRUSTED || rc == RPMRC_NOKEY) {
+	    int pos = lseek(Fileno(fd), 0, SEEK_CUR);
+	    if (pos > 0)
+		hdrcache_put(last->path, &st, *hdrp, pos);
 	}
     }
     return rc;

@@ -25,7 +25,7 @@ caches the result using memcached.
 %build
 gcc -shared -fPIC -D_GNU_SOURCE %optflags -flto -fwhole-program \
 	-o rpmhdrmemcache.so preload.c hdrcache.c mcdb.c \
-	-Wl,--no-as-needed -lrpmio -lrpm -Wl,--as-needed -lrpmdb -ldl -lmemcached -lmemcachedutil -llzo2 -Wl,-z,defs 
+	-Wl,--no-as-needed -lrpmio -lrpm -Wl,--as-needed -ldl -lmemcached -lmemcachedutil -llzo2 -Wl,-z,defs
 
 %install
 install -pD -m644 rpmhdrmemcache.so %buildroot%_libdir/rpmhdrmemcache.so
