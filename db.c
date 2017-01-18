@@ -144,8 +144,8 @@ bool qadb_get(struct cache *cache,
 	.flags = DB_DBT_USERMEM,
     };
 
-    // read lock
-    LOCK_DIR(cache, LOCK_SH);
+    // RMW lock
+    LOCK_DIR(cache, LOCK_EX);
 
     // db->get can trigger mpool->put
     BLOCK_SIGNALS(cache);
