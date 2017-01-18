@@ -4,7 +4,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <time.h>
 #include <rpm/rpmlib.h>
 #include <lzo/lzo1x.h>
 #include "hdrcache.h"
@@ -28,12 +27,6 @@ const char *opt_(const char *name)
 
 #define opt(name) opt_("RPMHDRMEMCACHE_" name)
 
-static __thread
-unsigned short now; // binary days since the epoch
-
-static __thread
-bool noatime;
-
 static
 int initialize()
 {
@@ -45,8 +38,6 @@ int initialize()
 	initialized = -1;
 	return initialized;
     }
-    if (opt("NOATIME"))
-	noatime = true;
     const char *configstring = opt("CONFIGSTRING");
     if (configstring == NULL)
 	configstring = "--SERVER=localhost";
@@ -57,29 +48,11 @@ int initialize()
     }
     initialized = 1;
     atexit(finalize);
-    now = (time(NULL) >> 16);
     lzo_init();
     return initialized;
 }
 
-enum {
-    V_ZBIT = (1 << 0), // the first bit must be zero
-    V_STO  = (1 << 1), // perl Storable
-    V_LZO  = (1 << 2), // compressed with lzo
-    V_ZLIB = (1 << 3), // compressed with zlib
-    V_RSV  = (1 << 4), // has reserved field
-};
-
-struct cache_ent {
-    // cache info
-    unsigned short vflags;
-    unsigned short mtime;
-    unsigned short atime;
-    unsigned short reserved;
-    // user data
-    unsigned off;
-    char blob[1];
-};
+#include <stdio.h>
 
 static
 int make_key(const char *path, const struct stat *st, char *key)
@@ -90,7 +63,11 @@ int make_key(const char *path, const struct stat *st, char *key)
     return strlen(key);
 }
 
-#include <stdio.h>
+struct cache_ent {
+    unsigned off;
+    bool compressed;
+    char blob[];
+};
 
 static
 const int hdrsize_max = (256 << 10);
@@ -101,25 +78,14 @@ Header hdrcache_get(const char *path, const struct stat *st, unsigned *off)
 	return NULL;
     char key[4096];
     int keysize = make_key(path, st, key);
-    struct cache_ent *data;
-    size_t datasize;
-    bool got = mcdb_get(env, key, keysize, (const void **)&data, &datasize);
-    if (!got)
+    struct cache_ent *ent;
+    size_t entsize;
+    if (!mcdb_get(env, key, keysize, (const void **) &ent, &entsize))
 	return NULL;
-    if ((data->vflags & (V_ZBIT | V_RSV)) != V_RSV)
-	return NULL;
-    // atime == 0: atime update disabled
-    // atime == 1: recently added object
-    if ((data->atime > 1 && data->atime < now) ||
-	(data->atime == 1 && data->mtime < now))
-    {
-	data->atime = now;
-	mcdb_put(env, key, keysize, data, datasize);
-    }
-    void *blob = data->blob;
+    void *blob = ent->blob;
     char ublob[hdrsize_max];
-    if (data->vflags & V_LZO) {
-	int blobsize = datasize - sizeof(struct cache_ent) + 1;
+    if (ent->compressed) {
+	int blobsize = entsize - sizeof(struct cache_ent);
 	lzo_uint ublobsize = 0;
 	int rc = lzo1x_decompress(blob, blobsize, ublob, &ublobsize, NULL);
 	if (rc != LZO_E_OK || ublobsize < 1 || ublobsize > hdrsize_max) {
@@ -134,8 +100,8 @@ Header hdrcache_get(const char *path, const struct stat *st, unsigned *off)
 	return NULL;
     }
     if (off)
-	*off = data->off;
-    free(data);
+	*off = ent->off;
+    free(ent);
     return h;
 }
 
@@ -148,16 +114,12 @@ void hdrcache_put(const char *path, const struct stat *st, Header h, unsigned of
     int hdrsize = headerSizeof(h, HEADER_MAGIC_NO);
     if (hdrsize < 1 || hdrsize > hdrsize_max)
 	return;
-    int databufsize = sizeof(struct cache_ent) - 1 +
-	    hdrsize + hdrsize / 16 + 64 + 3;
-    char databuf[databufsize];
-    int datasize;
-    struct cache_ent *data = (void *) databuf;
-    data->vflags = V_RSV;
-    data->mtime = now;
-    data->atime = noatime ? 0 : 1;
-    data->reserved = 0;
-    data->off = off;
+    int entbufsize = sizeof(struct cache_ent) + hdrsize +
+	    hdrsize / 16 + 64 + 3; // max lzo overhead
+    char entbuf[entbufsize] __attribute__((aligned(4)));
+    int entsize;
+    struct cache_ent *ent = (void *) entbuf;
+    ent->off = off;
     void *blob = headerUnload(h);
     if (blob == NULL) {
 	fprintf(stderr, "%s %s: headerLoad failed\n", __func__, key);
@@ -165,17 +127,18 @@ void hdrcache_put(const char *path, const struct stat *st, Header h, unsigned of
     }
     char lzobuf[LZO1X_1_MEM_COMPRESS];
     lzo_uint lzosize = 0;
-    lzo1x_1_compress(blob, hdrsize, data->blob, &lzosize, lzobuf);
+    lzo1x_1_compress(blob, hdrsize, ent->blob, &lzosize, lzobuf);
     if (lzosize > 0 && lzosize < hdrsize) {
-	data->vflags |= V_LZO;
-	datasize = sizeof(struct cache_ent) - 1 + lzosize;
+	ent->compressed = 1;
+	entsize = sizeof(struct cache_ent) + lzosize;
     }
     else {
-	memcpy(data->blob, blob, hdrsize);
-	datasize = sizeof(struct cache_ent) - 1 + hdrsize;
+	ent->compressed = 0;
+	memcpy(ent->blob, blob, hdrsize);
+	entsize = sizeof(struct cache_ent) + hdrsize;
     }
     free(blob);
-    mcdb_put(env, key, keysize, data, datasize);
+    mcdb_put(env, key, keysize, ent, entsize);
 }
 
 // ex: set ts=8 sts=4 sw=4 noet:
