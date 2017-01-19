@@ -11,76 +11,45 @@
 #include <unistd.h>
 #include <rpm/rpmio.h>
 #include <rpm/rpmlib.h>
-
-static inline
-bool endswith(const char *str, const char *suffix)
-{
-   size_t len1 = strlen(str);
-   size_t len2 = strlen(suffix);
-   if (len1 < len2)
-      return false;
-   str += (len1 - len2);
-   if (strcmp(str, suffix))
-      return false;
-   return true;
-}
-
-// The cache works in two stages: first, it traces each Fopen() call and
-// remembers the argument.  Then, if rpmReadPackageFile(fd) call follows,
-// it checks to see if the fd is referencing the last open file.
-struct last {
-    char *path;
-    struct stat st;
-    FD_t fd;
-};
-
-static __thread
-struct last thr_last;
-
-__attribute__((visibility("default"),externally_visible))
-FD_t Fopen(const char *path, const char *fmode)
-{
-    // pthread_getspecific(3) called only once
-    struct last *last = &thr_last;
-    if (last->path) {
-	free(last->path);
-	last->fd = NULL;
-    }
-    static // no need for thread var or write barrier
-    FD_t (*next)(const char *path, const char *fmode);
-    if (next == NULL) {
-	next = dlsym(RTLD_NEXT, __func__);
-	assert(next);
-    }
-    FD_t fd = next(path, fmode);
-    if (fd && endswith(path, ".rpm") && *fmode == 'r' &&
-	stat(path, &last->st) == 0 && S_ISREG(last->st.st_mode))
-    {
-	last->path = strdup(path);
-	if (last->path)
-	    last->fd = fd;
-    }
-    return fd;
-}
-
 #include "hdrcache.h"
 
 __attribute__((visibility("default"),externally_visible))
 rpmRC rpmReadPackageFile(rpmts ts, FD_t fd, const char *fn, Header *hdrp)
 {
+    // caching only works if we have rpm basename
+    const char *bn = Fdescr(fd);
+    // Fdescr(fd) can return "[none]" or "[fd %d]"
+    if (*bn == '[')
+	bn = fn;
+    if (bn) {
+	const char *slash = strrchr(bn, '/');
+	if (slash)
+	    bn = slash + 1;
+	// validate basename
+	size_t len = strlen(bn);
+	if (len < sizeof("a-1-1.src.rpm") - 1)
+	    bn = NULL;
+	else {
+	    const char *dotrpm = bn + len - 4;
+	    if (memcmp(dotrpm, ".rpm", 4))
+		bn = NULL;
+	}
+    }
+    // caching only works if we can stat the fd
+    struct stat st;
+    if (bn) {
+	int fdno = Fileno(fd);
+	if (fdno < 0 || fstat(fdno, &st) || !S_ISREG(st.st_mode))
+	    bn = NULL;
+    }
+    // the caller may pass hdrp=NULL, but we want to fetch the header anyway
     Header hdr_;
     if (hdrp == NULL)
 	hdrp = &hdr_;
-    struct stat st;
-    struct last *last = &thr_last;
-    bool match =
-	fd && fd == last->fd &&
-	stat(last->path, &st) == 0 && S_ISREG(st.st_mode) &&
-	st.st_dev == last->st.st_dev && st.st_ino == last->st.st_ino &&
-	st.st_size == last->st.st_size && st.st_mtime == last->st.st_mtime;
-    if (match) {
+    // get from the cache
+    if (bn) {
 	unsigned off;
-	*hdrp = hdrcache_get(last->path, &st, &off);
+	*hdrp = hdrcache_get(bn, &st, &off);
 	if (*hdrp) {
 	    int pos = lseek(Fileno(fd), off, SEEK_SET);
 	    if (pos != off)
@@ -89,6 +58,7 @@ rpmRC rpmReadPackageFile(rpmts ts, FD_t fd, const char *fn, Header *hdrp)
 		return RPMRC_OK;
 	}
     }
+    // call the real __func__
     static
     rpmRC (*next)(rpmts ts, FD_t fd, const char *fn, Header *hdrp);
     if (next == NULL) {
@@ -96,11 +66,12 @@ rpmRC rpmReadPackageFile(rpmts ts, FD_t fd, const char *fn, Header *hdrp)
 	assert(next);
     }
     rpmRC rc = next(ts, fd, fn, hdrp);
-    if (match) {
+    // put to the cache
+    if (bn) {
 	if (rc == RPMRC_OK || rc == RPMRC_NOTTRUSTED || rc == RPMRC_NOKEY) {
 	    int pos = lseek(Fileno(fd), 0, SEEK_CUR);
 	    if (pos > 0)
-		hdrcache_put(last->path, &st, *hdrp, pos);
+		hdrcache_put(bn, &st, *hdrp, pos);
 	}
     }
     return rc;

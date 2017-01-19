@@ -55,10 +55,8 @@ int initialize()
 #include <stdio.h>
 
 static
-int make_key(const char *path, const struct stat *st, char *key)
+int make_key(const char *bn, const struct stat *st, char *key)
 {
-    const char *bn = strrchr(path, '/');
-    bn = bn ? (bn + 1) : path;
     sprintf(key, "%s|%lu|%ld", bn, st->st_size, st->st_mtime);
     return strlen(key);
 }
@@ -74,12 +72,12 @@ struct cache_ent {
 static
 const int hdrsize_max = (1 << 20) - sizeof(struct cache_ent);
 
-Header hdrcache_get(const char *path, const struct stat *st, unsigned *off)
+Header hdrcache_get(const char *bn, const struct stat *st, unsigned *off)
 {
     if (initialize() < 0)
 	return NULL;
     char key[4096];
-    int keysize = make_key(path, st, key);
+    int keysize = make_key(bn, st, key);
     struct cache_ent *ent;
     size_t entsize;
     if (!mcdb_get(env, key, keysize, (const void **) &ent, &entsize))
@@ -91,14 +89,14 @@ Header hdrcache_get(const char *path, const struct stat *st, unsigned *off)
 	lzo_uint ublobsize = 0;
 	int rc = lzo1x_decompress(blob, blobsize, ublob, &ublobsize, NULL);
 	if (rc != LZO_E_OK || ublobsize < 1 || ublobsize > hdrsize_max) {
-	    fprintf(stderr, "%s %s: lzo1x_decompress failed\n", __func__, key);
+	    fprintf(stderr, "%s %s: lzo1x_decompress failed\n", __func__, bn);
 	    return NULL;
 	}
 	blob = ublob;
     }
     Header h = headerCopyLoad(blob);
     if (h == NULL) {
-	fprintf(stderr, "%s %s: headerLoad failed\n", __func__, key);
+	fprintf(stderr, "%s %s: headerLoad failed\n", __func__, bn);
 	return NULL;
     }
     if (off)
@@ -107,12 +105,12 @@ Header hdrcache_get(const char *path, const struct stat *st, unsigned *off)
     return h;
 }
 
-void hdrcache_put(const char *path, const struct stat *st, Header h, unsigned off)
+void hdrcache_put(const char *bn, const struct stat *st, Header h, unsigned off)
 {
     if (initialize() < 0)
 	return;
     char key[4096];
-    int keysize = make_key(path, st, key);
+    int keysize = make_key(bn, st, key);
     int hdrsize = headerSizeof(h, HEADER_MAGIC_NO);
     if (hdrsize < 1 || hdrsize > hdrsize_max)
 	return;
@@ -124,7 +122,7 @@ void hdrcache_put(const char *path, const struct stat *st, Header h, unsigned of
     ent->off = off;
     void *blob = headerUnload(h);
     if (blob == NULL) {
-	fprintf(stderr, "%s %s: headerLoad failed\n", __func__, key);
+	fprintf(stderr, "%s %s: headerLoad failed\n", __func__, bn);
 	return;
     }
     char lzobuf[LZO1X_1_MEM_COMPRESS];

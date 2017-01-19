@@ -9,6 +9,9 @@ Group: System/Configuration/Packaging
 URL: http://git.altlinux.org/gears/r/rpmhdrmemcache.git
 Source: %name-%version.tar
 
+# due to Fdescr()
+BuildRequires: librpm-devel >= 4.10
+
 # Automatically added by buildreq on Fri Dec 24 2010
 BuildRequires: libmemcached-devel liblzo2-devel librpm-devel
 
@@ -25,7 +28,7 @@ caches the result using memcached.
 %build
 gcc -shared -fPIC -D_GNU_SOURCE %optflags -flto -fwhole-program \
 	-o rpmhdrmemcache.so preload.c hdrcache.c mcdb.c \
-	-Wl,--no-as-needed -lrpmio -lrpm -Wl,--as-needed -ldl -lmemcached -lmemcachedutil -llzo2 -Wl,-z,defs
+	-Wl,--no-as-needed -lrpm -Wl,--as-needed -lrpmio -ldl -lmemcached -lmemcachedutil -llzo2 -Wl,-z,defs
 
 %install
 install -pD -m644 rpmhdrmemcache.so %buildroot%_libdir/rpmhdrmemcache.so
