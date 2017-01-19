@@ -69,8 +69,10 @@ struct cache_ent {
     char blob[];
 };
 
+// The maximum size of a value in memcached is limited to 1MiB.
+// Compression helps, but we choose not to depend on it for now.
 static
-const int hdrsize_max = (256 << 10);
+const int hdrsize_max = (1 << 20) - sizeof(struct cache_ent);
 
 Header hdrcache_get(const char *path, const struct stat *st, unsigned *off)
 {
