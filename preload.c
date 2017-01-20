@@ -73,5 +73,3 @@ rpmRC rpmReadPackageFile(rpmts ts, FD_t fd, const char *fn, Header *hdrp)
     }
     return rc;
 }
-
-// ex: set ts=8 sts=4 sw=4 noet:

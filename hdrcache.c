@@ -185,5 +185,3 @@ void hdrcache_put(const char *bn, const struct stat *st, Header h, unsigned off)
     free(blob);
     mcdb_put(env, key, keylen, ent, entsize);
 }
-
-// ex: set ts=8 sts=4 sw=4 noet:
