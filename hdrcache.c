@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
@@ -53,12 +54,52 @@ int initialize()
 }
 
 #include <stdio.h>
+#include <stdint.h>
+#include <endian.h>
+#include "sm3.h"
+
+// memcached needs ASCII keys no longer than 250 characters
+#define MAXKEY 250
 
 static
-int make_key(const char *bn, const struct stat *st, char *key)
+int hdrcache_key(const char *bn, const struct stat *st, char *key)
 {
-    sprintf(key, "%s|%lu|%ld", bn, st->st_size, st->st_mtime);
-    return strlen(key);
+    size_t len = strlen(bn);
+    assert(len > 4);
+    assert(bn[len-4] == '.');
+    // size and mtime will be serialized into 8 base64 characters;
+    // also, ".rpm" suffix will be stripped; on the second thought,
+    // the dot should rather be kept
+    size_t keylen = len + 8 - 3;
+    if (keylen > MAXKEY) {
+	fprintf(stderr, "%s %s: name too long\n", __func__, bn);
+	return 0;
+    }
+    // copy basename
+    memcpy(key, bn, len - 3);
+    key += len - 3;
+    // combine size+mtime
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+    uint64_t sm48 = 0;
+    sm3(st->st_size, st->st_mtime, (unsigned short *) &sm48);
+#else
+    unsigned short sm[3];
+    sm3(st->st_size, st->st_mtime, sm);
+    uint64_t sm48 = htole16(sm[0]) |
+	    // when htole16(x) returns unsigned short, sm[1] will be
+	    // promoted to int on behalf of << operator; it is crucial
+	    // to cast sm[1] to unsigned, to prune sign extenstion
+	    ((uint32_t) htole16(sm[1]) << 16) |
+	    ((uint64_t) htole16(sm[2]) << 32) ;
+#endif
+    // serialize size+mtime with base64
+    static const char base64[] = "0123456789"
+	    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	    "abcdefghijklmnopqrstuvwxyz" "+/";
+    for (int i = 0; i < 8; i++, sm48 >>= 6)
+	*key++ = base64[sm48 & 077];
+    *key = '\0';
+    return keylen;
 }
 
 struct cache_ent {
@@ -76,11 +117,13 @@ Header hdrcache_get(const char *bn, const struct stat *st, unsigned *off)
 {
     if (initialize() < 0)
 	return NULL;
-    char key[4096];
-    int keysize = make_key(bn, st, key);
+    char key[MAXKEY+1];
+    int keylen = hdrcache_key(bn, st, key);
+    if (keylen < 1)
+	return NULL;
     struct cache_ent *ent;
     size_t entsize;
-    if (!mcdb_get(env, key, keysize, (const void **) &ent, &entsize))
+    if (!mcdb_get(env, key, keylen, (const void **) &ent, &entsize))
 	return NULL;
     void *blob = ent->blob;
     char ublob[hdrsize_max];
@@ -109,8 +152,10 @@ void hdrcache_put(const char *bn, const struct stat *st, Header h, unsigned off)
 {
     if (initialize() < 0)
 	return;
-    char key[4096];
-    int keysize = make_key(bn, st, key);
+    char key[MAXKEY+1];
+    int keylen = hdrcache_key(bn, st, key);
+    if (keylen < 1)
+	return;
     int hdrsize = headerSizeof(h, HEADER_MAGIC_NO);
     if (hdrsize < 1 || hdrsize > hdrsize_max)
 	return;
@@ -138,7 +183,7 @@ void hdrcache_put(const char *bn, const struct stat *st, Header h, unsigned off)
 	entsize = sizeof(struct cache_ent) + hdrsize;
     }
     free(blob);
-    mcdb_put(env, key, keysize, ent, entsize);
+    mcdb_put(env, key, keylen, ent, entsize);
 }
 
 // ex: set ts=8 sts=4 sw=4 noet:
