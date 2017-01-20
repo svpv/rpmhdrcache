@@ -1,26 +1,13 @@
-#ifndef mcdb_H
-#define mcdb_H
+// This is a tiny wrapper around libmemcached, which can
+// hopefully reduce the complexity of interacting with
+// memcached to only a few well-defined operations.
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+struct mcdb *mcdb_open(const char *configstring);
+void mcdb_close(struct mcdb *db);
 
-struct mcdbenv *mcdbenv_open(const char *dirname);
-void mcdbenv_close(struct mcdbenv *env);
-
-#ifndef __cplusplus
-#include <stdbool.h>
-#endif
-
-bool mcdb_get(struct mcdbenv *env,
-	const void *key, int keysize,
+bool mcdb_get(struct mcdb *db,
+	const char *key, size_t keylen,
 	const void **datap, size_t *datasizep);
-bool mcdb_put(struct mcdbenv *env,
-	const void *key, int keysize,
+void mcdb_put(struct mcdb *db,
+	const char *key, size_t keylen,
 	const void *data, size_t datasize);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif

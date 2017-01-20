@@ -11,12 +11,12 @@
 #include "mcdb.h"
 
 static __thread
-struct mcdbenv *env;
+struct mcdb *db;
 
 static
 void finalize()
 {
-    mcdbenv_close(env);
+    mcdb_close(db);
 }
 
 static inline
@@ -42,8 +42,8 @@ int initialize()
     const char *configstring = opt("CONFIGSTRING");
     if (configstring == NULL)
 	configstring = "--SERVER=localhost";
-    env = mcdbenv_open(configstring);
-    if (env == NULL) {
+    db = mcdb_open(configstring);
+    if (db == NULL) {
 	initialized = -1;
 	return initialized;
     }
@@ -123,7 +123,7 @@ Header hdrcache_get(const char *bn, const struct stat *st, unsigned *off)
 	return NULL;
     struct cache_ent *ent;
     size_t entsize;
-    if (!mcdb_get(env, key, keylen, (const void **) &ent, &entsize))
+    if (!mcdb_get(db, key, keylen, (const void **) &ent, &entsize))
 	return NULL;
     void *blob = ent->blob;
     char ublob[hdrsize_max];
@@ -183,5 +183,5 @@ void hdrcache_put(const char *bn, const struct stat *st, Header h, unsigned off)
 	entsize = sizeof(struct cache_ent) + hdrsize;
     }
     free(blob);
-    mcdb_put(env, key, keylen, ent, entsize);
+    mcdb_put(db, key, keylen, ent, entsize);
 }
