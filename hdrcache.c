@@ -10,13 +10,20 @@
 #include "hdrcache.h"
 #include "mcdb.h"
 
+struct ctx {
+    struct mcdb *db;
+    int initialized;
+};
+
 static __thread
-struct mcdb *db;
+struct ctx thr_ctx;
 
 static
-void finalize()
+void finalize(int rc, void *arg)
 {
-    mcdb_close(db);
+    (void) rc;
+    struct ctx *ctx = arg;
+    mcdb_close(ctx->db);
 }
 
 static inline
@@ -29,28 +36,27 @@ const char *opt_(const char *name)
 #define opt(name) opt_("RPMHDRMEMCACHE_" name)
 
 static
-int initialize()
+struct ctx *initialize()
 {
-    static __thread
-    int initialized;
-    if (initialized)
-	return initialized;
+    struct ctx *ctx = &thr_ctx;
+    if (ctx->initialized)
+	return ctx->initialized > 0 ? ctx : NULL;
     if (opt("DISABLE")) {
-	initialized = -1;
-	return initialized;
+	ctx->initialized = -1;
+	return NULL;
     }
     const char *configstring = opt("CONFIGSTRING");
     if (configstring == NULL)
 	configstring = "--SERVER=localhost";
-    db = mcdb_open(configstring);
-    if (db == NULL) {
-	initialized = -1;
-	return initialized;
+    ctx->db = mcdb_open(configstring);
+    if (ctx->db == NULL) {
+	ctx->initialized = -1;
+	return NULL;
     }
-    initialized = 1;
-    atexit(finalize);
+    ctx->initialized = 1;
+    on_exit(finalize, ctx);
     lzo_init();
-    return initialized;
+    return ctx;
 }
 
 #include <stdio.h>
@@ -115,7 +121,8 @@ const int hdrsize_max = (1 << 20) - sizeof(struct cache_ent);
 
 Header hdrcache_get(const char *bn, const struct stat *st, unsigned *off)
 {
-    if (initialize() < 0)
+    struct ctx *ctx = initialize();
+    if (ctx == NULL)
 	return NULL;
     char key[MAXKEY+1];
     int keylen = hdrcache_key(bn, st, key);
@@ -123,7 +130,7 @@ Header hdrcache_get(const char *bn, const struct stat *st, unsigned *off)
 	return NULL;
     struct cache_ent *ent;
     size_t entsize;
-    if (!mcdb_get(db, key, keylen, (const void **) &ent, &entsize))
+    if (!mcdb_get(ctx->db, key, keylen, (const void **) &ent, &entsize))
 	return NULL;
     void *blob = ent->blob;
     char ublob[hdrsize_max];
@@ -150,7 +157,8 @@ Header hdrcache_get(const char *bn, const struct stat *st, unsigned *off)
 
 void hdrcache_put(const char *bn, const struct stat *st, Header h, unsigned off)
 {
-    if (initialize() < 0)
+    struct ctx *ctx = initialize();
+    if (ctx == NULL)
 	return;
     char key[MAXKEY+1];
     int keylen = hdrcache_key(bn, st, key);
@@ -183,5 +191,5 @@ void hdrcache_put(const char *bn, const struct stat *st, Header h, unsigned off)
 	entsize = sizeof(struct cache_ent) + hdrsize;
     }
     free(blob);
-    mcdb_put(db, key, keylen, ent, entsize);
+    mcdb_put(ctx->db, key, keylen, ent, entsize);
 }
