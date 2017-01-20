@@ -5,12 +5,23 @@
 #include <libmemcached-1.0/memcached.h>
 #include "mcdb.h"
 
+#define progname program_invocation_short_name
+
 struct mcdb *mcdb_open(const char *configstring)
 {
     assert(configstring && *configstring);
     memcached_st *memc = memcached(configstring, strlen(configstring));
-    if (!memc)
-	fprintf(stderr, "%s: %s\n", program_invocation_short_name, "cannot initialize memcached");
+    if (!memc) {
+	char buf[1024];
+	buf[0] = '\0';
+	memcached_return_t rc = libmemcached_check_configuration(configstring, strlen(configstring), buf, sizeof buf);
+	if (rc == MEMCACHED_SUCCESS && buf[0] == '\0')
+	    fprintf(stderr, "%s: %s\n", progname, "cannot initialize memcached");
+	else if (buf[0])
+	    fprintf(stderr, "%s: %s: %.*s\n", progname, "memcached", (int) sizeof buf, buf);
+	else
+	    fprintf(stderr, "%s: %s: %s\n", progname, "memcached", memcached_strerror(NULL, rc));
+    }
     return (void *) memc;
 }
 
