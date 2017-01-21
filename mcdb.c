@@ -56,3 +56,41 @@ void mcdb_put(struct mcdb *db,
     if (rc != MEMCACHED_SUCCESS)
 	fprintf(stderr, "%s: %s: %s\n", "memcached_set", key, memcached_strerror(memc, rc));
 }
+
+static memcached_return_t stat_cb(const memcached_instance_st *server,
+	const char *key, size_t klen,
+	const char *val, size_t vlen, void *arg)
+{
+    (void) server;
+    int *psize = arg;
+    // the fact that we're called means that at least one server is alive
+    if (*psize < 0)
+	*psize = 0;
+#define KEY "item_size_max"
+#define KLEN (sizeof KEY - 1)
+    if (klen != KLEN || memcmp(key, KEY, KLEN))
+	return MEMCACHED_SUCCESS;
+    (void) vlen;
+    int size = atoi(val);
+    // take the minimum size among the servers
+    if (size > 0 && (*psize == 0 || size < *psize))
+	*psize = size;
+    return MEMCACHED_SUCCESS;
+}
+
+int mcdb_max_item_size(struct mcdb *db)
+{
+    memcached_st *memc = (void *) db;
+    int size = -1;
+    memcached_return_t rc = memcached_stat_execute(memc, "settings", stat_cb, &size);
+    // fall back to the default size
+    if (size == 0)
+	size = 1 << 20;
+    if (size > 0)
+	return size;
+    if (rc != MEMCACHED_SUCCESS)
+	fprintf(stderr, "%s: %s: %s\n", progname, "memcached_stat_execute", memcached_strerror(NULL, rc));
+    else
+	fprintf(stderr, "%s: %s\n", progname, "cannot connect to memcached");
+    return -1;
+}

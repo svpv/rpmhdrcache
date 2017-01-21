@@ -11,3 +11,5 @@ bool mcdb_get(struct mcdb *db,
 void mcdb_put(struct mcdb *db,
 	const char *key, size_t keylen,
 	const void *data, size_t datasize);
+
+int mcdb_max_item_size(struct mcdb *db);

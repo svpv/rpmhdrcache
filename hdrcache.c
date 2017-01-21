@@ -13,6 +13,7 @@
 struct ctx {
     struct mcdb *db;
     int initialized;
+    int max_item_size;
 };
 
 static __thread
@@ -53,6 +54,13 @@ struct ctx *initialize()
 	ctx->initialized = -1;
 	return NULL;
     }
+    ctx->max_item_size = mcdb_max_item_size(ctx->db);
+    if (ctx->max_item_size < 0) {
+	mcdb_close(ctx->db);
+	ctx->initialized = -1;
+	return NULL;
+    }
+    assert(ctx->max_item_size > 0);
     ctx->initialized = 1;
     on_exit(finalize, ctx);
     lzo_init();
