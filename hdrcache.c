@@ -3,8 +3,9 @@
 #include <stdbool.h>
 #include <string.h>
 #include <assert.h>
+#include <errno.h>
 #include <rpm/rpmlib.h>
-#include <lzo/lzo1x.h>
+#include <lz4.h>
 #include "hdrcache.h"
 #include "mcdb.h"
 
@@ -53,7 +54,10 @@ struct ctx *initialize()
 	return NULL;
     }
     ctx->max_item_size = mcdb_max_item_size(ctx->db);
-    if (ctx->max_item_size < 0) {
+    if (ctx->max_item_size < 8192) {
+	if (ctx->max_item_size > 0)
+	    fprintf(stderr, "%s: %s: memcached max item size too small: %d\n",
+		    program_invocation_short_name, "rpmhdrcache", ctx->max_item_size);
 	mcdb_close(ctx->db);
 	ctx->initialized = -1;
 	return NULL;
@@ -61,20 +65,27 @@ struct ctx *initialize()
     assert(ctx->max_item_size > 0);
     ctx->initialized = 1;
     on_exit(finalize, ctx);
-    lzo_init();
     return ctx;
 }
 
 struct cache_ent {
-    unsigned off;
-    bool compressed;
-    char blob[];
+    unsigned off;	// file offset after rpmReadPackageFile
+    unsigned blobsize;	// uncompressed size (LZ4 cannot provide)
+    char zblob[];	// compressed blob
 };
 
-// The maximum size of a value in memcached is limited to 1MiB.
-// Compression helps, but we choose not to depend on it for now.
-static
-const int hdrsize_max = (1 << 20) - sizeof(struct cache_ent);
+// Any valid rpm header must provide at least the number of its
+// index entries and the size of its data.
+#define HDRSIZE_MIN 8
+// The maximum size of RPM header which we even try to deal with.
+// Note that the default size limit in memcached is 1MiB, but it
+// can be increased to 128MiB.  Thus the uncompressed size of
+// a header is limited to 256MiB.  This is also the limit imposed
+// in recent rpm releases.
+#define HDRSIZE_MAX (1 << 28)
+
+// Assume that LZ4 cannot compress an 8-byte header.
+#define ENTSIZE_MIN (sizeof(struct cache_ent) + HDRSIZE_MIN)
 
 Header hdrcache_get(const struct key *key, unsigned *off)
 {
@@ -85,22 +96,31 @@ Header hdrcache_get(const struct key *key, unsigned *off)
     size_t entsize;
     if (!mcdb_get(ctx->db, key->str, key->len, (const void **) &ent, &entsize))
 	return NULL;
-    void *blob = ent->blob;
-    char ublob[hdrsize_max];
-    if (ent->compressed) {
-	int blobsize = entsize - sizeof(struct cache_ent);
-	lzo_uint ublobsize = 0;
-	int rc = lzo1x_decompress(blob, blobsize, ublob, &ublobsize, NULL);
-	if (rc != LZO_E_OK || ublobsize < 1 || ublobsize > hdrsize_max) {
-	    fprintf(stderr, "%s %s: lzo1x_decompress failed\n", __func__, key->str);
-	    return NULL;
-	}
-	blob = ublob;
+    if (entsize < ENTSIZE_MIN) {
+	fprintf(stderr, "%s %s: bad entry\n", __func__, key->str);
+noent:	free(ent);
+	return NULL;
+    }
+    if (ent->blobsize < HDRSIZE_MIN || ent->blobsize > HDRSIZE_MAX) {
+	fprintf(stderr, "%s %s: bad ent->blobsize\n", __func__, key->str);
+	goto noent;
+    }
+    void *blob = malloc(ent->blobsize);
+    if (blob == NULL) {
+	fprintf(stderr, "%s %s: malloc: %m\n", __func__, key->str);
+	goto noent;
+    }
+    int blobsize = LZ4_decompress_safe(ent->zblob, blob, entsize - sizeof(*ent), ent->blobsize);
+    if (blobsize != (int) ent->blobsize) {
+	fprintf(stderr, "%s %s: %s failed\n", __func__, key->str, "LZ4_decompress_safe");
+	free(blob);
+	goto noent;
     }
     Header h = headerCopyLoad(blob);
+    free(blob);
     if (h == NULL) {
-	fprintf(stderr, "%s %s: headerLoad failed\n", __func__, key->str);
-	return NULL;
+	fprintf(stderr, "%s %s: %s failed\n", __func__, key->str, "headerLoad");
+	goto noent;
     }
     if (off)
 	*off = ent->off;
@@ -113,32 +133,37 @@ void hdrcache_put(const struct key *key, Header h, unsigned off)
     struct ctx *ctx = initialize();
     if (ctx == NULL)
 	return;
-    int hdrsize = headerSizeof(h, HEADER_MAGIC_NO);
-    if (hdrsize < 1 || hdrsize > hdrsize_max)
+    int blobsize = headerSizeof(h, HEADER_MAGIC_NO);
+    if (blobsize < HDRSIZE_MIN || blobsize > HDRSIZE_MAX)
 	return;
-    int entbufsize = sizeof(struct cache_ent) + hdrsize +
-	    hdrsize / 16 + 64 + 3; // max lzo overhead
-    char entbuf[entbufsize] __attribute__((aligned(4)));
-    int entsize;
-    struct cache_ent *ent = (void *) entbuf;
-    ent->off = off;
+    // Assume that LZ4 can compress by a factor of 2.
+    // The compressed header then must not exceed max_item_size.
+    if (blobsize / 2 > ctx->max_item_size)
+	return;
+    int entsize = sizeof(struct cache_ent) + LZ4_compressBound(blobsize);
+    if (entsize > ctx->max_item_size)
+	entsize = ctx->max_item_size;
+    struct cache_ent *ent = malloc(entsize);
+    if (ent == NULL) {
+	fprintf(stderr, "%s %s: malloc: %m\n", __func__, key->str);
+	return;
+    }
     void *blob = headerUnload(h);
     if (blob == NULL) {
-	fprintf(stderr, "%s %s: headerLoad failed\n", __func__, key->str);
+	fprintf(stderr, "%s %s: %s failed\n", __func__, key->str, "headerLoad");
 	return;
     }
-    char lzobuf[LZO1X_1_MEM_COMPRESS];
-    lzo_uint lzosize = 0;
-    lzo1x_1_compress(blob, hdrsize, ent->blob, &lzosize, lzobuf);
-    if (lzosize > 0 && lzosize < hdrsize) {
-	ent->compressed = 1;
-	entsize = sizeof(struct cache_ent) + lzosize;
-    }
-    else {
-	ent->compressed = 0;
-	memcpy(ent->blob, blob, hdrsize);
-	entsize = sizeof(struct cache_ent) + hdrsize;
-    }
+    int zblobsize = LZ4_compress_default(blob, ent->zblob, blobsize, entsize - sizeof(*ent));
     free(blob);
+    if (zblobsize < ENTSIZE_MIN - sizeof(*ent)) {
+	fprintf(stderr, "%s %s: %s failed\n", __func__, key->str, "LZ4_compress_default");
+	free(ent);
+	return;
+    }
+    assert(zblobsize <= entsize - sizeof(*ent));
+    entsize = zblobsize + sizeof(*ent);
+    ent->off = off;
+    ent->blobsize = blobsize;
     mcdb_put(ctx->db, key->str, key->len, ent, entsize);
+    free(ent);
 }

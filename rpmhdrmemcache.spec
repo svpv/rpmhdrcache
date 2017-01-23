@@ -12,8 +12,8 @@ Source: %name-%version.tar
 # due to Fdescr()
 BuildRequires: librpm-devel >= 4.10
 
-# Automatically added by buildreq on Fri Dec 24 2010
-BuildRequires: libmemcached-devel liblzo2-devel librpm-devel
+# Automatically added by buildreq on Mon Jan 23 2017
+BuildRequires: liblz4-devel libmemcached-devel librpm-devel
 
 %description
 Sisyphus repository currently has more than 10K source packages (which is

@@ -14,4 +14,4 @@ rpmhdrmemcache.so: preload.c key.c hdrcache.c mcdb.c
 		-std=gnu11 -D_GNU_SOURCE -Wall \
 		-fpic -shared -flto -fwhole-program \
 		-Wl,--no-as-needed -lrpm -Wl,--as-needed -lrpmio \
-		-ldl -lmemcached -lmemcachedutil -llzo2 -Wl,-z,defs
+		-ldl -lmemcached -lmemcachedutil -llz4 -Wl,-z,defs
