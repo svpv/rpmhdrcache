@@ -1,10 +1,8 @@
-#include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <stdbool.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <unistd.h>
+#include <string.h>
+#include <assert.h>
 #include <rpm/rpmlib.h>
 #include <lzo/lzo1x.h>
 #include "hdrcache.h"
@@ -67,55 +65,6 @@ struct ctx *initialize()
     return ctx;
 }
 
-#include <stdio.h>
-#include <stdint.h>
-#include <endian.h>
-#include "sm3.h"
-
-// memcached needs ASCII keys no longer than 250 characters
-#define MAXKEY 250
-
-static
-int hdrcache_key(const char *bn, const struct stat *st, char *key)
-{
-    size_t len = strlen(bn);
-    assert(len > 4);
-    assert(bn[len-4] == '.');
-    // size and mtime will be serialized into 8 base64 characters;
-    // also, ".rpm" suffix will be stripped; on the second thought,
-    // the dot should rather be kept
-    size_t keylen = len + 8 - 3;
-    if (keylen > MAXKEY) {
-	fprintf(stderr, "%s %s: name too long\n", __func__, bn);
-	return 0;
-    }
-    // copy basename
-    memcpy(key, bn, len - 3);
-    key += len - 3;
-    // combine size+mtime
-#if __BYTE_ORDER == __LITTLE_ENDIAN
-    uint64_t sm48 = 0;
-    sm3(st->st_size, st->st_mtime, (unsigned short *) &sm48);
-#else
-    unsigned short sm[3];
-    sm3(st->st_size, st->st_mtime, sm);
-    uint64_t sm48 = htole16(sm[0]) |
-	    // when htole16(x) returns unsigned short, sm[1] will be
-	    // promoted to int on behalf of << operator; it is crucial
-	    // to cast sm[1] to unsigned, to prune sign extenstion
-	    ((uint32_t) htole16(sm[1]) << 16) |
-	    ((uint64_t) htole16(sm[2]) << 32) ;
-#endif
-    // serialize size+mtime with base64
-    static const char base64[] = "0123456789"
-	    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	    "abcdefghijklmnopqrstuvwxyz" "+/";
-    for (int i = 0; i < 8; i++, sm48 >>= 6)
-	*key++ = base64[sm48 & 077];
-    *key = '\0';
-    return keylen;
-}
-
 struct cache_ent {
     unsigned off;
     bool compressed;
@@ -127,18 +76,14 @@ struct cache_ent {
 static
 const int hdrsize_max = (1 << 20) - sizeof(struct cache_ent);
 
-Header hdrcache_get(const char *bn, const struct stat *st, unsigned *off)
+Header hdrcache_get(const struct key *key, unsigned *off)
 {
     struct ctx *ctx = initialize();
     if (ctx == NULL)
 	return NULL;
-    char key[MAXKEY+1];
-    int keylen = hdrcache_key(bn, st, key);
-    if (keylen < 1)
-	return NULL;
     struct cache_ent *ent;
     size_t entsize;
-    if (!mcdb_get(ctx->db, key, keylen, (const void **) &ent, &entsize))
+    if (!mcdb_get(ctx->db, key->str, key->len, (const void **) &ent, &entsize))
 	return NULL;
     void *blob = ent->blob;
     char ublob[hdrsize_max];
@@ -147,14 +92,14 @@ Header hdrcache_get(const char *bn, const struct stat *st, unsigned *off)
 	lzo_uint ublobsize = 0;
 	int rc = lzo1x_decompress(blob, blobsize, ublob, &ublobsize, NULL);
 	if (rc != LZO_E_OK || ublobsize < 1 || ublobsize > hdrsize_max) {
-	    fprintf(stderr, "%s %s: lzo1x_decompress failed\n", __func__, bn);
+	    fprintf(stderr, "%s %s: lzo1x_decompress failed\n", __func__, key->str);
 	    return NULL;
 	}
 	blob = ublob;
     }
     Header h = headerCopyLoad(blob);
     if (h == NULL) {
-	fprintf(stderr, "%s %s: headerLoad failed\n", __func__, bn);
+	fprintf(stderr, "%s %s: headerLoad failed\n", __func__, key->str);
 	return NULL;
     }
     if (off)
@@ -163,14 +108,10 @@ Header hdrcache_get(const char *bn, const struct stat *st, unsigned *off)
     return h;
 }
 
-void hdrcache_put(const char *bn, const struct stat *st, Header h, unsigned off)
+void hdrcache_put(const struct key *key, Header h, unsigned off)
 {
     struct ctx *ctx = initialize();
     if (ctx == NULL)
-	return;
-    char key[MAXKEY+1];
-    int keylen = hdrcache_key(bn, st, key);
-    if (keylen < 1)
 	return;
     int hdrsize = headerSizeof(h, HEADER_MAGIC_NO);
     if (hdrsize < 1 || hdrsize > hdrsize_max)
@@ -183,7 +124,7 @@ void hdrcache_put(const char *bn, const struct stat *st, Header h, unsigned off)
     ent->off = off;
     void *blob = headerUnload(h);
     if (blob == NULL) {
-	fprintf(stderr, "%s %s: headerLoad failed\n", __func__, bn);
+	fprintf(stderr, "%s %s: headerLoad failed\n", __func__, key->str);
 	return;
     }
     char lzobuf[LZO1X_1_MEM_COMPRESS];
@@ -199,5 +140,5 @@ void hdrcache_put(const char *bn, const struct stat *st, Header h, unsigned off)
 	entsize = sizeof(struct cache_ent) + hdrsize;
     }
     free(blob);
-    mcdb_put(ctx->db, key, keylen, ent, entsize);
+    mcdb_put(ctx->db, key->str, key->len, ent, entsize);
 }

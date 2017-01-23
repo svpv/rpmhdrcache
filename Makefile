@@ -9,7 +9,7 @@ RPM_OPT_FLAGS ?= -g -O2
 # 4) large file support is not actually needed, because in the code,
 # st_size and st_mtime are always truncated to 32-bit unsigned integers;
 # 5) -std=gnu11 works with gcc >= 4.7, while RHEL7 has gcc-4.8.
-rpmhdrmemcache.so: preload.c hdrcache.c mcdb.c
+rpmhdrmemcache.so: preload.c key.c hdrcache.c mcdb.c
 	$(CC) -o $@ $^ $(RPM_OPT_FLAGS) \
 		-std=gnu11 -D_GNU_SOURCE -Wall \
 		-fpic -shared -flto -fwhole-program \
