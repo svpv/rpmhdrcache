@@ -155,12 +155,12 @@ void hdrcache_put(const struct key *key, Header h, unsigned off)
     }
     int zblobsize = LZ4_compress_default(blob, ent->zblob, blobsize, entsize - sizeof(*ent));
     free(blob);
-    if (zblobsize < ENTSIZE_MIN - sizeof(*ent)) {
+    if (zblobsize < (int) ENTSIZE_MIN - (int) sizeof(*ent)) {
 	fprintf(stderr, "%s %s: %s failed\n", __func__, key->str, "LZ4_compress_default");
 	free(ent);
 	return;
     }
-    assert(zblobsize <= entsize - sizeof(*ent));
+    assert(zblobsize <= entsize - (int) sizeof(*ent));
     entsize = zblobsize + sizeof(*ent);
     ent->off = off;
     ent->blobsize = blobsize;

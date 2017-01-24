@@ -41,7 +41,7 @@ rpmRC rpmReadPackageFile(rpmts ts, FD_t fd, const char *fn, Header *hdrp)
 	*hdrp = hdrcache_get(&key, &off);
 	if (*hdrp) {
 	    int pos = lseek(Fileno(fd), off, SEEK_SET);
-	    if (pos != off)
+	    if (pos != (int) off)
 		*hdrp = headerFree(*hdrp);
 	    else
 		return RPMRC_OK;

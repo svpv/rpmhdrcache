@@ -11,7 +11,7 @@ RPM_OPT_FLAGS ?= -g -O2
 # 5) -std=gnu11 works with gcc >= 4.7, while RHEL7 has gcc-4.8.
 rpmhdrmemcache.so: preload.c key.c hdrcache.c mcdb.c
 	$(CC) -o $@ $^ $(RPM_OPT_FLAGS) \
-		-std=gnu11 -D_GNU_SOURCE -Wall \
+		-std=gnu11 -D_GNU_SOURCE -Wall -Wextra \
 		-fpic -shared -flto -fwhole-program \
 		-Wl,--no-as-needed -lrpm -Wl,--as-needed -lrpmio \
 		-ldl -lmemcached -lmemcachedutil -llz4 -Wl,-z,defs
