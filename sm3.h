@@ -1,5 +1,5 @@
 /*
- * sm3.h - combine size and mtime into short[3]
+ * sm3.h - combine st_size and st_mtime into short[3]
  */
 
 static const unsigned char reverse8[] = {
