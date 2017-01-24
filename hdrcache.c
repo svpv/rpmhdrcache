@@ -116,10 +116,10 @@ noent:	free(ent);
 	free(blob);
 	goto noent;
     }
-    Header h = headerCopyLoad(blob);
-    free(blob);
+    Header h = headerImport(blob, blobsize, HEADERIMPORT_FAST);
     if (h == NULL) {
 	fprintf(stderr, "%s %s: %s failed\n", __func__, key->str, "headerLoad");
+	free(blob);
 	goto noent;
     }
     if (off)

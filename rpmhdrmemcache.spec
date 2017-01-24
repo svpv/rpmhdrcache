@@ -9,7 +9,7 @@ Group: System/Configuration/Packaging
 URL: http://git.altlinux.org/gears/r/rpmhdrmemcache.git
 Source: %name-%version.tar
 
-# due to Fdescr()
+# due to Fdescr() and headerImport()
 BuildRequires: librpm-devel >= 4.10
 
 # Automatically added by buildreq on Mon Jan 23 2017
