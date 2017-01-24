@@ -141,9 +141,12 @@ void hdrcache_put(const struct key *key, Header h, unsigned off)
     // The compressed header then must not exceed max_item_size.
     if (blobsize / 2 > ctx->max_item_size)
 	return;
+    bool limit = false;
     int entsize = sizeof(struct cache_ent) + LZ4_compressBound(blobsize);
-    if (entsize > ctx->max_item_size)
+    if (entsize > ctx->max_item_size) {
 	entsize = ctx->max_item_size;
+	limit = true;
+    }
     struct cache_ent *ent = malloc(entsize);
     if (ent == NULL) {
 	fprintf(stderr, "%s %s: malloc: %m\n", __func__, key->str);
@@ -157,7 +160,8 @@ void hdrcache_put(const struct key *key, Header h, unsigned off)
     int zblobsize = LZ4_compress_default(blob, ent->zblob, blobsize, entsize - sizeof(*ent));
     free(blob);
     if (zblobsize < (int) ENTSIZE_MIN - (int) sizeof(*ent)) {
-	fprintf(stderr, "%s %s: %s failed\n", __func__, key->str, "LZ4_compress_default");
+	if (!limit)
+	    fprintf(stderr, "%s %s: %s failed\n", __func__, key->str, "LZ4_compress_default");
 	free(ent);
 	return;
     }
