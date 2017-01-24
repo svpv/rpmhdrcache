@@ -22,14 +22,15 @@ bool hdrcache_key(const char *fname, const struct stat *st, struct key *key)
 	return false;
     // size and mtime will be serialized into 8 base64 characters;
     // also, ".rpm" suffix will be stripped; on the second thought,
-    // the dot should rather be kept
+    // a separator should rather be kept
     key->len = len + 8 - 3;
     if (key->len > MAXKEYLEN) {
 	fprintf(stderr, "%s %s: name too long\n", __func__, bn);
 	return 0;
     }
-    // copy basename
-    memcpy(key->str, bn, len - 3);
+    // copy basename and put the separator
+    char *p = mempcpy(key->str, bn, len - 4);
+    *p++ = '@';
     // combine size+mtime
 #if __BYTE_ORDER == __LITTLE_ENDIAN
     uint64_t sm48 = 0;
@@ -48,7 +49,6 @@ bool hdrcache_key(const char *fname, const struct stat *st, struct key *key)
     static const char base64[] = "0123456789"
 	    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	    "abcdefghijklmnopqrstuvwxyz" "+/";
-    char *p = key->str + len - 3;
     for (int i = 0; i < 8; i++, sm48 >>= 6)
 	*p++ = base64[sm48 & 077];
     *p = '\0';
