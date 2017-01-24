@@ -32,7 +32,7 @@ void mcdb_close(struct mcdb *db)
 
 bool mcdb_get(struct mcdb *db,
 	const char *key, size_t keylen,
-	const void **datap, size_t *datasizep)
+	void **datap, size_t *datasizep)
 {
     memcached_st *memc = (void *) db;
     memcached_return_t rc;

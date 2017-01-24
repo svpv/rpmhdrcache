@@ -95,7 +95,7 @@ Header hdrcache_get(const struct key *key, unsigned *off)
 	return NULL;
     struct cache_ent *ent;
     size_t entsize;
-    if (!mcdb_get(ctx->db, key->str, key->len, (const void **) &ent, &entsize))
+    if (!mcdb_get(ctx->db, key->str, key->len, (void **) &ent, &entsize))
 	return NULL;
     if (entsize < ENTSIZE_MIN) {
 	fprintf(stderr, "%s %s: bad entry\n", __func__, key->str);

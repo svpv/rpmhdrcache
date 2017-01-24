@@ -7,7 +7,7 @@ void mcdb_close(struct mcdb *db);
 
 bool mcdb_get(struct mcdb *db,
 	const char *key, size_t keylen,
-	const void **datap, size_t *datasizep);
+	void **datap /* malloc'd */, size_t *datasizep);
 void mcdb_put(struct mcdb *db,
 	const char *key, size_t keylen,
 	const void *data, size_t datasize);
