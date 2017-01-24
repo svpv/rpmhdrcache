@@ -45,9 +45,10 @@ struct ctx *initialize()
 	ctx->initialized = -1;
 	return NULL;
     }
+    // see libmemcached_configuration(3)
     const char *configstring = opt("CONFIGSTRING");
     if (configstring == NULL)
-	configstring = "--SERVER=localhost";
+	configstring = "--SERVER=127.0.0.1";
     ctx->db = mcdb_open(configstring);
     if (ctx->db == NULL) {
 	ctx->initialized = -1;
