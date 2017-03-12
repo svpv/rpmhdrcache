@@ -1,5 +1,5 @@
 /*
- * sm3.h - combine size and mtime into short[3]
+ * sm3.h - combine st_size and st_mtime into short[3]
  */
 
 static const unsigned char reverse8[] = {
@@ -58,7 +58,7 @@ static inline unsigned reverse16(unsigned x)
  * the size by more than 8M.
  */
 
-static void sm3(unsigned size, unsigned mtime, unsigned short sm[3])
+static inline void sm3(unsigned size, unsigned mtime, unsigned short sm[3])
 {
     sm[0] = size;
     sm[1] = mtime;
