@@ -26,9 +26,9 @@ rpmRC rpmReadPackageFile(rpmts ts, FD_t fd, const char *fn, Header *hdrp)
 	    fname = NULL;
     }
     // make the key
-    struct key key;
+    struct rpmkey key;
     if (fname) {
-	if (!hdrcache_key(fname, &st, &key))
+	if (!rpmcache_key(fname, st.st_size, st.st_mtime, &key))
 	    fname = NULL;
     }
     // get from the cache

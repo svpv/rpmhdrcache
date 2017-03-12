@@ -6,7 +6,6 @@
 #include <sys/stat.h> // mkdir
 #include "cache.h"
 #include "rpmcache.h"
-#include "rpmarch.h"
 #include "error.h"
 #include "cache.h"
 
@@ -82,98 +81,22 @@ struct rpmcache *rpmcache_open(const char *dir)
     return (struct rpmcache *) cache_open(fulldir);
 }
 
-/*
- * A key is something that (fname,fsize,mtime) triple is digested into.
- * Namely, it is digested into two parts: 1) an architecture found in
- * rpm basename; this must be a valid rpm architecture; it will be used
- * as a subdir/ under fulldir/ to open a separate arch-specific cache;
- * 2) a key for lookup in that cache, consisting of (name,fsize,mtime)
- * where name is rpm basename devoid of .arch.rpm suffix.
- */
-#include <limits.h> // need NAME_MAX
-
-// NAME_MAX is typically 255 and does not count a terminating null byte.
-// To improve collation, we do place a null byte between name and (size,mtime).
-#define KEY_DATA_MAX (NAME_MAX	- (sizeof(".rpm") - 1) \
-				- (ARCH_MIN_WORD_LENGTH + /* dot */ 1) \
-				+ 1 + 2 * sizeof(unsigned))
-
-// also need something like NAME_MIN for N-V-R.A.rpm
-#define RPM_NAME_MIN (2 + 2 + 2 + ARCH_MIN_WORD_LENGTH + 4)
-
-struct key {
-    const char *arch;
-    int datasize;
-    char data[KEY_DATA_MAX];
-};
-
-// to make collation by mtime effective, we need to convert
-// mtime to big endian aka network byte order
-#include <arpa/inet.h>
-
-static bool make_key(struct key *k,
-	const char *fname, unsigned fsize, unsigned mtime)
-{
-    // validate basename
-    const char *slash = strrchr(fname, '/');
-    if (slash)
-	fname = slash + 1;
-    size_t len = strlen(fname);
-    if (len < RPM_NAME_MIN || len > NAME_MAX) {
-	ERROR("invalid rpm filename: %s", fname);
-	return false;
-    }
-    const char *dotrpm = fname + len - 4;
-    if (memcmp(dotrpm, ".rpm", 4)) {
-	ERROR("missing .rpm suffix: %s", fname);
-	return false;
-    }
-
-    // validate arch
-    len -= 4;
-    memcpy(k->data, fname, len);
-    k->data[len] = '\0';
-    char *arch = strrchr(k->data, '.');
-    if (arch)
-	*arch++ = '\0';
-    else {
-	ERROR("cannot find .arch.rpm suffix: %s", fname);
-	return false;
-    }
-    unsigned alen = len - (arch - k->data);
-    k->arch = validate_rpm_arch(arch, alen);
-    if (!k->arch) {
-	ERROR("invalid .arch.rpm suffix: %s", fname);
-	return false;
-    }
-
-    // append (size,mtime)
-    len -= alen + 1;
-    fsize = htonl(fsize);
-    mtime = htonl(mtime);
-    // collate by mtime first
-    memcpy(k->data + len + 1, &mtime, sizeof mtime);
-    memcpy(k->data + len + 1 + sizeof mtime, &fsize, sizeof fsize);
-    k->datasize = len + 1 + sizeof fsize + sizeof mtime;
-    return true;
-}
-
 bool rpmcache_get(struct rpmcache *rpmcache,
-	const char *fname, unsigned fsize, unsigned mtime,
+	const struct rpmkey *key,
 	void **valp, int *valsizep)
 {
     return
-    bsm_get((struct cache *) rpmcache,
-	    fname, ".rpm", fsize, mtime,
+    cache_get((struct cache *) rpmcache,
+	    key->str, key->len,
 	    valp, valsizep);
 }
 
 void rpmcache_put(struct rpmcache *rpmcache,
-	const char *fname, unsigned fsize, unsigned mtime,
+	const struct rpmkey *key,
 	const void *val, int valsize)
 {
-    bsm_put((struct cache *) rpmcache,
-	    fname, ".rpm", fsize, mtime,
+    cache_get((struct cache *) rpmcache,
+	    key->str, key->len,
 	    val, valsize);
 }
 

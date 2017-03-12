@@ -88,7 +88,7 @@ struct cache_ent {
 // Assume that LZ4 cannot compress an 8-byte header.
 #define ENTSIZE_MIN (sizeof(struct cache_ent) + HDRSIZE_MIN)
 
-Header hdrcache_get(const struct key *key, unsigned *off)
+Header hdrcache_get(const struct rpmkey *key, unsigned *off)
 {
     struct ctx *ctx = initialize();
     if (ctx == NULL)
@@ -129,7 +129,7 @@ noent:	free(ent);
     return h;
 }
 
-void hdrcache_put(const struct key *key, Header h, unsigned off)
+void hdrcache_put(const struct rpmkey *key, Header h, unsigned off)
 {
     struct ctx *ctx = initialize();
     if (ctx == NULL)

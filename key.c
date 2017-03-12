@@ -5,11 +5,10 @@
 #include <assert.h>
 #include <sys/stat.h>
 #include <endian.h>
-#include <rpm/rpmlib.h>
-#include "hdrcache.h"
+#include "rpmcache.h"
 #include "sm3.h"
 
-bool hdrcache_key(const char *fname, const struct stat *st, struct key *key)
+bool rpmcache_key(const char *fname, unsigned fsize, unsigned mtime, struct rpmkey *key)
 {
     const char *bn = strrchr(fname, '/');
     bn = bn ? bn + 1 : fname;
@@ -24,9 +23,9 @@ bool hdrcache_key(const char *fname, const struct stat *st, struct key *key)
     // also, ".rpm" suffix will be stripped; on the second thought,
     // a separator should rather be kept
     key->len = len + 8 - 3;
-    if (key->len > MAXKEYLEN) {
+    if (key->len > MAXRPMKEYLEN) {
 	fprintf(stderr, "%s %s: name too long\n", __func__, bn);
-	return 0;
+	return false;
     }
     // copy basename and put the separator
     char *p = mempcpy(key->str, bn, len - 4);
@@ -34,10 +33,10 @@ bool hdrcache_key(const char *fname, const struct stat *st, struct key *key)
     // combine size+mtime
 #if __BYTE_ORDER == __LITTLE_ENDIAN
     uint64_t sm48 = 0;
-    sm3(st->st_size, st->st_mtime, (unsigned short *) &sm48);
+    sm3(fsize, mtime, (unsigned short *) &sm48);
 #else
     unsigned short sm[3];
-    sm3(st->st_size, st->st_mtime, sm);
+    sm3(fsize, mtime, sm);
     uint64_t sm48 = htole16(sm[0]) |
 	    // when htole16(x) returns unsigned short, sm[1] will be
 	    // promoted to int on behalf of << operator; it is crucial
