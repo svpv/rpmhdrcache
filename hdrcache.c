@@ -10,9 +10,8 @@
 #include "mcdb.h"
 
 struct ctx {
-    struct mcdb *db;
+    struct rpmcache *rpmcache;
     int initialized;
-    int max_item_size;
 };
 
 static __thread
@@ -23,17 +22,8 @@ void finalize(int rc, void *arg)
 {
     (void) rc;
     struct ctx *ctx = arg;
-    mcdb_close(ctx->db);
+    rpmcache_close(ctx->rpmcache);
 }
-
-static inline
-const char *opt_(const char *name)
-{
-    const char *str = getenv(name);
-    return (str && *str) ? str : NULL;
-}
-
-#define opt(name) opt_("RPMHDRMEMCACHE_" name)
 
 static
 struct ctx *initialize()
@@ -41,39 +31,15 @@ struct ctx *initialize()
     struct ctx *ctx = &thr_ctx;
     if (ctx->initialized)
 	return ctx->initialized > 0 ? ctx : NULL;
-    if (opt("DISABLE")) {
+    ctx->rpmcache = rpmcache_open("rpmhdrcache");
+    if (ctx->rpmcache == NULL) {
 	ctx->initialized = -1;
 	return NULL;
     }
-    // see libmemcached_configuration(3)
-    const char *configstring = opt("CONFIGSTRING");
-    if (configstring == NULL)
-	configstring = "--SERVER=127.0.0.1";
-    ctx->db = mcdb_open(configstring);
-    if (ctx->db == NULL) {
-	ctx->initialized = -1;
-	return NULL;
-    }
-    ctx->max_item_size = mcdb_max_item_size(ctx->db);
-    if (ctx->max_item_size < 8192) {
-	if (ctx->max_item_size > 0)
-	    fprintf(stderr, "%s: %s: memcached max item size too small: %d\n",
-		    program_invocation_short_name, "rpmhdrcache", ctx->max_item_size);
-	mcdb_close(ctx->db);
-	ctx->initialized = -1;
-	return NULL;
-    }
-    assert(ctx->max_item_size > 0);
     ctx->initialized = 1;
     on_exit(finalize, ctx);
     return ctx;
 }
-
-struct cache_ent {
-    unsigned off;	// file offset after rpmReadPackageFile
-    unsigned blobsize;	// uncompressed size (LZ4 cannot provide)
-    char zblob[];	// compressed blob
-};
 
 // Any valid rpm header must provide at least the number of its
 // index entries and the size of its data.
@@ -93,39 +59,18 @@ Header hdrcache_get(const struct rpmkey *key, unsigned *off)
     struct ctx *ctx = initialize();
     if (ctx == NULL)
 	return NULL;
-    struct cache_ent *ent;
-    size_t entsize;
-    if (!mcdb_get(ctx->db, key->str, key->len, (void **) &ent, &entsize))
+    void *blob;
+    int blobsize;
+    if (!rpmcache_get(ctx->rpmcache, key, &blob, &blobsize))
 	return NULL;
-    if (entsize < ENTSIZE_MIN) {
-	fprintf(stderr, "%s %s: bad entry\n", __func__, key->str);
-noent:	free(ent);
-	return NULL;
-    }
-    if (ent->blobsize < HDRSIZE_MIN || ent->blobsize > HDRSIZE_MAX) {
-	fprintf(stderr, "%s %s: bad ent->blobsize\n", __func__, key->str);
-	goto noent;
-    }
-    void *blob = malloc(ent->blobsize);
-    if (blob == NULL) {
-	fprintf(stderr, "%s %s: malloc: %m\n", __func__, key->str);
-	goto noent;
-    }
-    int blobsize = LZ4_decompress_safe(ent->zblob, blob, entsize - sizeof(*ent), ent->blobsize);
-    if (blobsize != (int) ent->blobsize) {
-	fprintf(stderr, "%s %s: %s failed\n", __func__, key->str, "LZ4_decompress_safe");
-	free(blob);
-	goto noent;
-    }
-    Header h = headerImport(blob, blobsize, HEADERIMPORT_FAST);
+    Header h = headerImport(blob, blobsize - 4, HEADERIMPORT_FAST);
     if (h == NULL) {
 	fprintf(stderr, "%s %s: %s failed\n", __func__, key->str, "headerLoad");
 	free(blob);
-	goto noent;
+	return NULL;
     }
     if (off)
-	*off = ent->off;
-    free(ent);
+	memcpy(off, blob + blobsize - 4, 4);
     return h;
 }
 
@@ -137,38 +82,8 @@ void hdrcache_put(const struct rpmkey *key, Header h, unsigned off)
     int blobsize = headerSizeof(h, HEADER_MAGIC_NO);
     if (blobsize < HDRSIZE_MIN || blobsize > HDRSIZE_MAX)
 	return;
-    // Assume that LZ4 can compress by a factor of 2.
-    // The compressed header then must not exceed max_item_size.
-    if (blobsize / 2 > ctx->max_item_size)
-	return;
-    bool limit = false;
-    int entsize = sizeof(struct cache_ent) + LZ4_compressBound(blobsize);
-    if (entsize > ctx->max_item_size) {
-	entsize = ctx->max_item_size;
-	limit = true;
-    }
-    struct cache_ent *ent = malloc(entsize);
-    if (ent == NULL) {
-	fprintf(stderr, "%s %s: malloc: %m\n", __func__, key->str);
-	return;
-    }
     void *blob = headerUnload(h);
-    if (blob == NULL) {
-	fprintf(stderr, "%s %s: %s failed\n", __func__, key->str, "headerLoad");
-	return;
-    }
-    int zblobsize = LZ4_compress_default(blob, ent->zblob, blobsize, entsize - sizeof(*ent));
-    free(blob);
-    if (zblobsize < (int) ENTSIZE_MIN - (int) sizeof(*ent)) {
-	if (!limit)
-	    fprintf(stderr, "%s %s: %s failed\n", __func__, key->str, "LZ4_compress_default");
-	free(ent);
-	return;
-    }
-    assert(zblobsize <= entsize - (int) sizeof(*ent));
-    entsize = zblobsize + sizeof(*ent);
-    ent->off = off;
-    ent->blobsize = blobsize;
-    mcdb_put(ctx->db, key->str, key->len, ent, entsize);
-    free(ent);
+    blob = realloc(blob, blobsize + 4);
+    memcpy(blob + blobsize, &off, 4);
+    rpmcache_put(ctx->rpmcache, key, blob, blobsize + 4);
 }

@@ -5,7 +5,7 @@
 extern "C" {
 #endif
 
-struct rpmcache *rpmcache_open(const char *dir);
+struct rpmcache *rpmcache_open(const char *name);
 void rpmcache_clean(struct rpmcache *rpmcache, int days);
 void rpmcache_close(struct rpmcache *rpmcache);
 
