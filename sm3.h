@@ -54,12 +54,12 @@ static inline unsigned reverse32(unsigned x)
  *
  * Here, the mtime bits are reversed, and the overlapping bits are XORed.
  * Consider what happens if a package gets rebuilt in exactly 2^24 seconds,
- * which is about 13 years.  If we kept only 24 bits, the situation would
+ * which is about half a year.  If we kept only 24 bits, the situation would
  * go undetected.  In our arrangement, however, the size also has to increase
  * by 2^23 = 8M.  Which is not bloody likely!
  *
  * Note how the bit reversal balances off two unlikely events: if an attacker
- * wants to wait for less than 13 years, he or she has to be able to affect
+ * wants to wait for less than half a year, he or she has to be able to affect
  * the size by more than 8M.
  */
 
