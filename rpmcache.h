@@ -22,7 +22,7 @@ struct rpmkey {
 };
 
 // An rpm package is identified by its key, an ASCII string, which combines basename,
-// file size, and mtime.  Something like this: x11perf-1.5.4-alt1.x86_64@nEUq6B7h
+// file size, and mtime.  Something like this: x11perf-1.5.4-alt1.x86_64@LqNLDQdSM
 bool rpmcache_key(const char *fname, unsigned fsize, unsigned mtime, struct rpmkey *key);
 
 /* Concerning empty values and trailing null bytes,

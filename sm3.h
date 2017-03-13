@@ -26,6 +26,11 @@ static inline unsigned reverse16(unsigned x)
     return (reverse8[x & 0xff] << 8) | reverse8[(x >> 8) & 0xff];
 }
 
+static inline unsigned reverse32(unsigned x)
+{
+    return (reverse16(x) << 16) | reverse16(x >> 16);
+}
+
 /*
  * The size and mtime which we use are truncated to 32 bits.  This is not
  * a problem, since these values are very unlikely to change by exactly 2^32.
@@ -63,4 +68,12 @@ static inline void sm3(unsigned size, unsigned mtime, unsigned short sm[3])
     sm[0] = size;
     sm[1] = mtime;
     sm[2] = (size >> 16) ^ reverse16(mtime >> 16);
+}
+
+/*
+ * The same idea can be applied to any number of bits >= 32, not just 48.
+ */
+static inline uint64_t smx(unsigned size, unsigned mtime, int nbits)
+{
+    return size ^ ((uint64_t) reverse32(mtime) << (nbits - 32));
 }

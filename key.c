@@ -3,8 +3,6 @@
 #include <stdbool.h>
 #include <string.h>
 #include <assert.h>
-#include <sys/stat.h>
-#include <endian.h>
 #include "rpmcache.h"
 #include "sm3.h"
 
@@ -19,10 +17,10 @@ bool rpmcache_key(const char *fname, unsigned fsize, unsigned mtime, struct rpmk
     const char *dotrpm = bn + len - 4;
     if (memcmp(dotrpm, ".rpm", 4))
 	return false;
-    // size and mtime will be serialized into 8 base64 characters;
+    // size and mtime will be serialized into 9 base62 characters;
     // also, ".rpm" suffix will be stripped; on the second thought,
     // a separator should rather be kept
-    key->len = len + 8 - 3;
+    key->len = len + 9 - 3;
     if (key->len > MAXRPMKEYLEN) {
 	fprintf(stderr, "%s %s: name too long\n", __func__, bn);
 	return false;
@@ -30,26 +28,18 @@ bool rpmcache_key(const char *fname, unsigned fsize, unsigned mtime, struct rpmk
     // copy basename and put the separator
     char *p = mempcpy(key->str, bn, len - 4);
     *p++ = '@';
-    // combine size+mtime
-#if __BYTE_ORDER == __LITTLE_ENDIAN
-    uint64_t sm48 = 0;
-    sm3(fsize, mtime, (unsigned short *) &sm48);
-#else
-    unsigned short sm[3];
-    sm3(fsize, mtime, sm);
-    uint64_t sm48 = htole16(sm[0]) |
-	    // when htole16(x) returns unsigned short, sm[1] will be
-	    // promoted to int on behalf of << operator; it is crucial
-	    // to cast sm[1] to unsigned, to prune sign extenstion
-	    ((uint32_t) htole16(sm[1]) << 16) |
-	    ((uint64_t) htole16(sm[2]) << 32) ;
-#endif
-    // serialize size+mtime with base64
-    static const char base64[] = "0123456789"
+    // serialize size+mtime
+    // since 2^53 < 62^9, 53 bits fit nicely into 9 base62 characters
+    uint64_t sm53 = smx(fsize, mtime, 53);
+    static const char base62[] = "0123456789"
 	    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	    "abcdefghijklmnopqrstuvwxyz" "+/";
-    for (int i = 0; i < 8; i++, sm48 >>= 6)
-	*p++ = base64[sm48 & 077];
+	    "abcdefghijklmnopqrstuvwxyz";
+    for (int i = 0; i < 9; i++) {
+	int r = sm53 % 62;
+	sm53 /= 62;
+	*p++ = base62[r];
+    }
+    assert(sm53 == 0);
     *p = '\0';
     return true;
 }

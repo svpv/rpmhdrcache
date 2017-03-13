@@ -1,5 +1,6 @@
 #include <string.h>
 #include <limits.h>
+#include <stdint.h>
 #include "cache.h"
 #include "error.h"
 #include "sm3.h"
