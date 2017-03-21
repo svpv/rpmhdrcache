@@ -234,7 +234,17 @@ uncompressed2:
 
 void rpmcache_close(struct rpmcache *rpmcache)
 {
-    cache_close((struct cache *) rpmcache);
+    switch (rpmcache->t) {
+    case CONFTYPE_QACACHE:
+	cache_close(rpmcache->db);
+	break;
+    case CONFTYPE_MEMCACHED:
+	mcdb_close(rpmcache->db);
+	break;
+    case CONFTYPE_REDIS:
+	ERROR("redis not yet supported");
+    }
+    free(rpmcache);
 }
 
 // ex:ts=8 sts=4 sw=4 noet
