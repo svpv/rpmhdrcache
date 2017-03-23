@@ -86,4 +86,5 @@ void hdrcache_put(const struct rpmkey *key, Header h, unsigned off)
     blob = realloc(blob, blobsize + 4);
     memcpy(blob + blobsize, &off, 4);
     rpmcache_put(ctx->rpmcache, key, blob, blobsize + 4);
+    free(blob);
 }
